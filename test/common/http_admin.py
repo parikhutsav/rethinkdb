@@ -195,64 +195,6 @@ class Table(object):
         assert split_point in self.shards
         self.shards.remove(split_point)
 
-class DummyNamespace(Namespace):
-    def __init__(self, uuid, json_data):
-        Namespace.__init__(self, uuid, json_data, "dummy")
-
-    def shards_to_json(self):
-        return self.shards
-
-    def parse_shards(self, subset_strings):
-        subsets = [ ]
-        superset = set()
-        for subset_string in subset_strings:
-            subset = u""
-            for c in subset_string:
-                if c in u"{}, ":
-                    pass
-                elif c in u"abcdefghijklmnopqrstuvwxyz":
-                    assert c not in superset
-                    superset.add(c)
-                    subset += c
-                else:
-                    raise RuntimeError("Invalid value in DummyNamespace shard set")
-            assert len(subset) != 0
-            subsets.append(subset)
-        return subsets
-
-    def add_shard(self, new_subset):
-        # The shard is a string of characters, a-z, which must be unique across all shards
-        if isinstance(new_subset, str):
-            new_subset = unicode(new_subset)
-        assert isinstance(new_subset, unicode)
-        for i in range(len(self.shards)):
-            for c in new_subset:
-                if c in self.shards[i]:
-                    self.shards[i]= self.shards[i].replace(c, u"")
-        self.shards.append(new_subset)
-
-    def remove_shard(self, subset):
-        if isinstance(subset, str):
-            subset = unicode(subset)
-        assert isinstance(subset, unicode)
-        assert subset in self.shards
-        assert len(self.shards) > 0
-        self.shards.remove(subset)
-        self.shards[0] += subset # Throw the old shard into the first one
-
-    def __str__(self):
-        return "Dummy" + Namespace.__str__(self)
-
-# TODO
-class MemcachedNamespace(Namespace):
-    def __init__(self, uuid, json_data):
-        raise Exception("MemcacheNamespace have been removed")
-
-# TODO
-class RDBNamespace(Namespace):
-    def __init__(self):
-        raise Exception("Use the new Table class instead of RDBNamespace")
-
 class Machine(object):
     def __init__(self, uuid, json_data):
         self.uuid = validate_uuid(uuid)
@@ -331,7 +273,7 @@ class ClusterAccess(object):
         for i in self.machines.iterkeys():
             print "%s: %s" % (i, self.machines[i])
 
-    def print_namespaces(self):
+    def print_tables(self):
         for i in self.tables.iterkeys():
             print "%s: %s" % (i, self.tables[i])
 
@@ -392,10 +334,10 @@ class ClusterAccess(object):
     def find_database(self, what):
         return self._find_thing(what, Database, "data base", self.databases)
 
-    def find_namespace(self, what):
+    def find_table(self, what):
         nss = {}
         nss.update(self.tables)
-        return self._find_thing(what, Table, "namespace", nss)
+        return self._find_thing(what, Table, "table", nss)
 
     def get_directory(self):
         return self.do_query("GET", "/ajax/directory")
@@ -423,42 +365,38 @@ class ClusterAccess(object):
         self.do_query("POST", "/ajax/semilattice/machines/" + serv.uuid + "/datacenter_uuid", datacenter.uuid)
         self.update_cluster_data(10)
 
-    def move_namespace_to_datacenter(self, namespace, primary):
-        namespace = self.find_namespace(namespace)
+    def move_table_to_datacenter(self, table, primary):
+        table = self.find_table(table)
         primary = None if primary is None else self.find_datacenter(primary)
-        namespace.primary_uuid = primary.uuid
-        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/primary_uuid" % (namespace.uuid), primary.uuid)
+        table.primary_uuid = primary.uuid
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/primary_uuid" % (table.uuid, ), primary.uuid)
         self.update_cluster_data(10)
 
-    def set_namespace_affinities(self, namespace, affinities = { }):
-        namespace = self.find_namespace(namespace)
+    def set_table_affinities(self, table, affinities = { }):
+        table = self.find_table(table)
         aff_dict = { }
         for datacenter, count in affinities.iteritems():
             aff_dict[self.find_datacenter(datacenter).uuid] = count
-        namespace.replica_affinities.update(aff_dict)
-        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/replica_affinities" % (namespace.uuid), aff_dict)
+        table.replica_affinities.update(aff_dict)
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/replica_affinities" % (table.uuid), aff_dict)
         self.update_cluster_data(10)
 
-    def set_namespace_ack_expectations(self, namespace, ack_expectations = { }):
-        namespace = self.find_namespace(namespace)
+    def set_table_ack_expectations(self, table, ack_expectations = { }):
+        table = self.find_table(table)
         ae_dict = { }
         for datacenter, count in ack_expectations.iteritems():
             dc = self.find_datacenter(datacenter)
             ae_dict[dc.uuid] = { "expectation": count }
-            print "current AE", namespace.ack_expectations
+            print "current AE", table.ack_expectations
             print "dc uuid", dc.uuid
-            if dc.uuid in namespace.ack_expectations:
-                namespace.ack_expectations[dc.uuid].update({ "expectation": count })
+            if dc.uuid in table.ack_expectations:
+                table.ack_expectations[dc.uuid].update({ "expectation": count })
             else:
-                namespace.ack_expectations[dc.uuid] = { "expectation": count,  "hard_durability": True }
-        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/ack_expectations" % (namespace.uuid), ae_dict)
+                table.ack_expectations[dc.uuid] = { "expectation": count,  "hard_durability": True }
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/ack_expectations" % (table.uuid), ae_dict)
         self.update_cluster_data(10)
 
-    def add_namespace(self, name = None, port = None, primary = None, affinities = { }, ack_expectations = { }, primary_key = None, database = None, check = False):
-        if port is None:
-            port = random.randint(10000, 20000)
-            if protocol == "rdb":
-                port = 0 # port is ignored by the server, but used by get_namespace_host
+    def add_table(self, name = None, primary = None, affinities = { }, ack_expectations = { }, primary_key = None, database = None, check = False):
         if name is None:
             name = str(random.randint(0, 1000000))
         if primary is not None:
@@ -483,31 +421,29 @@ class ClusterAccess(object):
             "ack_expectations": ack_dict,
             "database": database_uuid
             }
-        if protocol == "rdb":
-            if primary_key is None:
-                primary_key = "id"
-            # Right now `primary_key` is required to be `"id"` because the
-            # server doesn't support setting the primary key.
-            # data_to_post["primary_key"] = primary_key
-            assert primary_key == "id"
-        else:
-            assert primary_key is None
-        info = self.do_query("POST", "/ajax/semilattice/%s_namespaces/new" % protocol, data_to_post)
+
+        if primary_key is None:
+            primary_key = "id"
+        # Right now `primary_key` is required to be `"id"` because the
+        # server doesn't support setting the primary key. <---- TODO[ATN] is that correct?
+        # data_to_post["primary_key"] = primary_key
+        assert primary_key == "id"
+
+        info = self.do_query("POST", "/ajax/semilattice/rdb_namespaces/new", data_to_post)
         assert len(info) == 1
         uuid, json_data = next(info.iteritems())
-        type_class = namespace_classes_by_protocol_name[protocol]
-        namespace = type_class(uuid, json_data)
-        getattr(self, "%s_namespaces" % protocol)[namespace.uuid] = namespace
+        table = Table(uuid, json_data)
+        getattr(self, "rdb_namespaces")[table.uuid] = table
         self.update_cluster_data(10)
         if check:
-            self._wait_for_namespace(namespace, 90)
-            print "Namespace available"
-        return namespace
+            self._wait_for_table(table, 90)
+            print "Table available"
+        return table
 
-    def _wait_for_namespace(self, namespace, timeout):
+    def _wait_for_table(self, table, timeout):
         while True:
             try:
-                self.get_distribution(namespace)
+                self.get_distribution(table)
                 return
             except BadServerResponse:
                 time.sleep(1)
@@ -545,35 +481,35 @@ class ClusterAccess(object):
         setattr(conflict.target, conflict.field, value) # TODO: this probably won't work for certain things like shards that we represent differently locally than the strict json format
         self.update_cluster_data(10)
 
-    def add_namespace_shard(self, namespace, split_point):
-        namespace = self.find_namespace(namespace)
-        namespace.add_shard(split_point)
-        info = self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/shards" % (namespace.protocol, namespace.uuid), namespace.shards_to_json())
+    def add_table_shard(self, table, split_point):
+        table = self.find_table(table)
+        table.add_shard(split_point)
+        info = self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/shards" % (table.uuid, ), table.shards_to_json())
         self.update_cluster_data(10)
 
-    def remove_namespace_shard(self, namespace, split_point):
-        namespace = self.find_namespace(namespace)
-        namespace.remove_shard(split_point)
-        info = self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/shards" % (namespace.protocol, namespace.uuid), namespace.shards_to_json())
+    def remove_table_shard(self, table, split_point):
+        table = self.find_table(table)
+        table.remove_shard(split_point)
+        info = self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/shards" % (table.uuid ,), table.shards_to_json())
         self.update_cluster_data(10)
 
-    def change_namespace_shards(self, namespace, adds=[], removes=[]):
-        namespace = self.find_namespace(namespace)
+    def change_table_shards(self, table, adds=[], removes=[]):
+        table = self.find_table(table)
         for split_point in adds:
-            namespace.add_shard(split_point)
+            table.add_shard(split_point)
         for split_point in removes:
-            namespace.remove_shard(split_point)
-        info = self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/shards" % (namespace.protocol, namespace.uuid), namespace.shards_to_json())
+            table.remove_shard(split_point)
+        info = self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/shards" % (table.uuid, ), table.shards_to_json())
         self.update_cluster_data(10)
 
-    def get_datacenter_in_namespace(self, namespace, primary = None):
-        namespace = self.find_namespace(namespace)
+    def get_datacenter_in_table(self, table, primary = None):
+        table = self.find_table(table)
         if primary is not None:
-            return self.datacenters[namespace.primary_uuid]
+            return self.datacenters[table.primary_uuid]
 
-        # Build a list of datacenters in the given namespace
-        datacenters = [ self.datacenters[namespace.primary_uuid] ]
-        for uuid in namespace.replica_affinities.iterkeys():
+        # Build a list of datacenters in the given table
+        datacenters = [ self.datacenters[table.primary_uuid] ]
+        for uuid in table.replica_affinities.iterkeys():
             datacenters.append(self.datacenters[uuid])
         return random.choice(datacenters)
 
@@ -591,20 +527,20 @@ class ClusterAccess(object):
                 message += issue["description"] + "\n"
             raise RuntimeError("Cluster has issues:\n" + message)
 
-    def get_distribution(self, namespace, depth = 1):
-        return self.do_query("GET", "/ajax/distribution?namespace=%s&depth=%d" % (namespace.uuid, depth))
+    def get_distribution(self, table, depth = 1):
+        return self.do_query("GET", "/ajax/distribution?namespace=%s&depth=%d" % (table.uuid, depth))
 
-    def is_blueprint_satisfied(self, namespace):
-        namespace = self.find_namespace(namespace)
+    def is_blueprint_satisfied(self, table):
+        table = self.find_table(table)
         directory = self.do_query("GET", "/ajax/directory/_")
-        blueprint = self.do_query("GET", "/ajax/semilattice/%s_namespaces/%s/blueprint" % (namespace.protocol, namespace.uuid))
+        blueprint = self.do_query("GET", "/ajax/semilattice/rdb_namespaces/%s/blueprint" % (table.uuid, ))
         for peer, shards in blueprint["peers_roles"].iteritems():
             if peer in directory:
                 subdirectory = directory[peer]
             else:
                 return False
-            if namespace.uuid in subdirectory[namespace.protocol + "_namespaces"]["reactor_bcards"]:
-                reactor_bcard = subdirectory[namespace.protocol + "_namespaces"]["reactor_bcards"][namespace.uuid]
+            if table.uuid in subdirectory["rdb_namespaces"]["reactor_bcards"]:
+                reactor_bcard = subdirectory["rdb_namespaces"]["reactor_bcards"][table.uuid]
             else:
                 return False
             for shard_range, shard_role in shards.iteritems():
@@ -620,9 +556,9 @@ class ClusterAccess(object):
                     return False
         return True
 
-    def wait_until_blueprint_satisfied(self, namespace, timeout = 600, print_seconds = True):
+    def wait_until_blueprint_satisfied(self, table, timeout = 600, print_seconds = True):
         start_time = time.time()
-        while not self.is_blueprint_satisfied(namespace):
+        while not self.is_blueprint_satisfied(table):
             time.sleep(1)
             if time.time() - start_time > timeout:
                 ajax = self.do_query("GET", "/ajax")
@@ -640,7 +576,7 @@ class ClusterAccess(object):
                 local_data[uuid] = data_type(uuid, cluster_data[uuid])
         assert len(cluster_data) == len(local_data)
 
-    # Get the list of machines/namespaces from the cluster, verify that it is consistent across each machine
+    # Get the list of machines/tables from the cluster, verify that it is consistent across each machine
     def _verify_consistent_cluster(self, timeout):
         timeout = max(1, timeout)
         last_error = ("", "")
@@ -681,8 +617,8 @@ class ClusterAccess(object):
                 if value == u"VALUE_IN_CONFLICT":
                     if obj not in self.conflicts:
                         # Get the possible values and create a value conflict object
-                        if isinstance(obj, Namespace):
-                            path = obj.protocol + "_namespaces"
+                        if isinstance(obj, Table):
+                            path = "rdb_namespaces"
                         elif isinstance(obj, Machine):
                             path = "machine"
                         elif isinstance(obj, Datacenter):
