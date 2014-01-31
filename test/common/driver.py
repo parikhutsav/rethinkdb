@@ -47,11 +47,9 @@ def find_rethinkdb_executable(mode = ""):
             mode = 'debug'
     return find_subpath("build/%s/rethinkdb" % mode)
 
+# TODO: remove
 def get_namespace_host(namespace_port, processes):
-    if namespace_port == 0:
-        return ("localhost", random.choice(processes).driver_port)
-    else:
-        return ("localhost", namespace_port + random.choice(processes).port_offset)
+    raise Exception("get_namespace_host was replaced by Cluster::get_host()")
 
 class Metacluster(object):
     """A `Metacluster` is a group of clusters. It's responsible for maintaining
@@ -63,10 +61,6 @@ class Metacluster(object):
         self.dbs_path = tempfile.mkdtemp()
         self.files_counter = 0
         self.closed = False
-        try:
-            self.port_offset = int(os.environ["RETHINKDB_PORT_OFFSET"])
-        except KeyError:
-            self.port_offset = random.randint(0, 1800) * 10
 
     def close(self):
         """Kills all processes and deletes all files. Also, makes the
@@ -116,6 +110,10 @@ class Metacluster(object):
             process.cluster = dest
             dest.processes.add(process)
 
+    def new_client_port(self):
+        # TODO
+        return random.randint(32768, 61000)
+
 class Cluster(object):
     """A `Cluster` represents a group of `Processes` that are all connected to
     each other (ideally, anyway; see the note in `move_processes`). """
@@ -164,6 +162,9 @@ class Cluster(object):
             unblock_path(process.local_cluster_port, other_process.cluster_port)
             unblock_path(other_process.cluster_port, process.local_cluster_port)
 
+    def get_host(self):
+        return ("localhost", random.choice(self.processes).driver_port)
+
 class Files(object):
     """A `Files` object is a RethinkDB data directory. Each `Process` needs a
     `Files`. To "restart" a server, create a `Files`, create a `Process`, stop
@@ -209,7 +210,7 @@ class _Process(object):
         assert isinstance(cluster, Cluster)
         assert cluster.metacluster is not None
         assert all(hasattr(self, x) for x in
-                   "local_cluster_port port_offset logfile_path".split())
+                   "local_cluster_port logfile_path".split())
 
         if executable_path is None:
             executable_path = find_rethinkdb_executable()
@@ -354,14 +355,11 @@ class Process(_Process):
 
         self.files = files
         self.logfile_path = os.path.join(files.db_path, "log_file")
-
-        self.port_offset = cluster.metacluster.port_offset + self.files.id_number
-        self.local_cluster_port = 29015 + self.port_offset
+        self.local_cluster_port = cluster.metacluster.new_client_port()
 
         options = ["serve",
-                   "--directory",  self.files.db_path,
-                   "--port-offset",  str(self.port_offset),
-                   "--client-port",  str(self.local_cluster_port),
+                   "--directory", self.files.db_path,
+                   "--client-port", str(self.local_cluster_port)
                    "--cluster-port", "0",
                    "--driver-port", "0",
                    "--http-port", "0"
@@ -385,12 +383,10 @@ class ProxyProcess(_Process):
 
         self.logfile_path = logfile_path
 
-        self.port_offset = cluster.metacluster.port_offset + cluster.metacluster.files_counter
-        self.local_cluster_port = 28015 + self.port_offset
+        self.local_cluster_port = cluster.metacluster.new_client_port()
 
         options = ["proxy",
                    "--log-file",  self.logfile_path,
-                   "--port-offset",  str(self.port_offset),
                    "--client-port",  str(self.local_cluster_port)
                    ] + extra_options
 

@@ -100,8 +100,8 @@ class Blueprint(object):
     def __str__(self):
         return "Blueprint(%r)" % self.to_json()
 
-class Namespace(object):
-    def __init__(self, uuid, json_data, protocol):
+class Table(object):
+    def __init__(self, uuid, json_data):
         self.uuid = validate_uuid(uuid)
         self.blueprint = Blueprint(json_data[u"blueprint"])
         self.primary_uuid = None if json_data[u"primary_uuid"] is None else validate_uuid(json_data[u"primary_uuid"])
@@ -109,11 +109,9 @@ class Namespace(object):
         self.ack_expectations = json_data[u"ack_expectations"]
         self.shards = self.parse_shards(json_data[u"shards"])
         self.name = json_data[u"name"]
-        self.port = json_data[u"port"]
         self.primary_pinnings = json_data[u"primary_pinnings"]
         self.secondary_pinnings = json_data[u"secondary_pinnings"]
         self.database_uuid = None if json_data[u"database"] is None else validate_uuid(json_data[u"database"])
-        self.protocol = protocol
 
     def check(self, data):
         return data[u"name"] == self.name and \
@@ -121,7 +119,6 @@ class Namespace(object):
             data[u"replica_affinities"] == self.replica_affinities and \
             data[u"ack_expectations"] == self.ack_expectations and \
             self.parse_shards(data[u"shards"]) == self.shards and \
-            data[u"port"] == self.port and \
             data[u"primary_pinnings"] == self.primary_pinnings and \
             data[u"secondary_pinnings"] == self.secondary_pinnings and \
             data[u"database"] == self.database_uuid
@@ -134,7 +131,6 @@ class Namespace(object):
             unicode("replica_affinities"): self.replica_affinities,
             unicode("ack_expectations"): self.ack_expectations,
             unicode("shards"): self.shards_to_json(),
-            unicode("port"): self.port,
             unicode("primary_pinnings"): self.primary_pinnings,
             unicode("secondary_pinnings"): self.secondary_pinnings,
             unicode("database"): self.database_uuid
@@ -152,7 +148,52 @@ class Namespace(object):
         else:
             for uuid, count in self.replica_affinities.iteritems():
                 shards += uuid + "=" + str(count) + ", "
-        return "Namespace(name:%s, port:%d, primary:%s, affinities:%sprimary pinnings:%s, secondary_pinnings:%s, shard boundaries:%s, blueprint:NYI, database:%s)" % (self.name, self.port, self.primary_uuid, affinities, self.primary_pinnings, self.secondary_pinnings, self.shards, self.database_uuid)
+        return "Table(name:%s, primary:%s, affinities:%sprimary pinnings:%s, secondary_pinnings:%s, shard boundaries:%s, blueprint:NYI, database:%s)" % (self.name, self.primary_uuid, affinities, self.primary_pinnings, self.secondary_pinnings, self.shards, self.database_uuid)
+
+    def shards_to_json(self):
+        # Build the ridiculously formatted shard data
+        shard_json = []
+        last_split = u""
+        for split in self.shards:
+            shard_json.append(json.dumps([urllib.quote(last_split), urllib.quote(split)]))
+            last_split = split
+        shard_json.append(json.dumps([urllib.quote(last_split), None]))
+        return shard_json
+
+    def parse_shards(self, shards):
+        # Build the ridiculously formatted shard data
+        splits = [ ]
+        last_split = u""
+        matches = None
+        parsed_shards = [ ]
+        for shard in shards:
+            left, right = json.loads(shard)
+            assert isinstance(left, basestring)
+            assert right is None or isinstance(right, basestring)
+            parsed_shards.append((urllib.unquote(left), urllib.unquote(right) if right is not None else None))
+        parsed_shards.sort()
+        last_split = u""
+        for left, right in parsed_shards:
+            assert left == last_split
+            if right is not None:
+                splits.append(right)
+            last_split = right
+        assert last_split is None
+        assert sorted(splits) == splits
+        return splits
+
+    def add_shard(self, split_point):
+        if isinstance(split_point, str):
+            split_point = unicode(split_point)
+        assert split_point not in self.shards
+        self.shards.append(split_point)
+        self.shards.sort()
+
+    def remove_shard(self, split_point):
+        if isinstance(split_point, str):
+            split_point = unicode(split_point)
+        assert split_point in self.shards
+        self.shards.remove(split_point)
 
 class DummyNamespace(Namespace):
     def __init__(self, uuid, json_data):
@@ -202,115 +243,15 @@ class DummyNamespace(Namespace):
     def __str__(self):
         return "Dummy" + Namespace.__str__(self)
 
+# TODO
 class MemcachedNamespace(Namespace):
     def __init__(self, uuid, json_data):
-        Namespace.__init__(self, uuid, json_data, "memcached")
+        raise Exception("MemcacheNamespace have been removed")
 
-    def shards_to_json(self):
-        # Build the ridiculously formatted shard data
-        shard_json = []
-        last_split = u""
-        for split in self.shards:
-            shard_json.append(json.dumps([urllib.quote(last_split), urllib.quote(split)]))
-            last_split = split
-        shard_json.append(json.dumps([urllib.quote(last_split), None]))
-        return shard_json
-
-    def parse_shards(self, shards):
-        # Build the ridiculously formatted shard data
-        splits = [ ]
-        last_split = u""
-        matches = None
-        parsed_shards = [ ]
-        for shard in shards:
-            left, right = json.loads(shard)
-            assert isinstance(left, basestring)
-            assert right is None or isinstance(right, basestring)
-            parsed_shards.append((urllib.unquote(left), urllib.unquote(right) if right is not None else None))
-        parsed_shards.sort()
-        last_split = u""
-        for left, right in parsed_shards:
-            assert left == last_split
-            if right is not None:
-                splits.append(right)
-            last_split = right
-        assert last_split is None
-        assert sorted(splits) == splits
-        return splits
-
-    def add_shard(self, split_point):
-        if isinstance(split_point, str):
-            split_point = unicode(split_point)
-        assert split_point not in self.shards
-        self.shards.append(split_point)
-        self.shards.sort()
-
-    def remove_shard(self, split_point):
-        if isinstance(split_point, str):
-            split_point = unicode(split_point)
-        assert split_point in self.shards
-        self.shards.remove(split_point)
-
-    def __str__(self):
-        return "Memcached" + Namespace.__str__(self)
-
+# TODO
 class RDBNamespace(Namespace):
-    def __init__(self, uuid, json_data):
-        Namespace.__init__(self, uuid, json_data, "rdb")
-
-    def shards_to_json(self):
-        # Build the ridiculously formatted shard data
-        shard_json = []
-        last_split = u""
-        for split in self.shards:
-            shard_json.append(json.dumps([urllib.quote(last_split), urllib.quote(split)]))
-            last_split = split
-        shard_json.append(json.dumps([urllib.quote(last_split), None]))
-        return shard_json
-
-    def parse_shards(self, shards):
-        # Build the ridiculously formatted shard data
-        splits = [ ]
-        last_split = u""
-        matches = None
-        parsed_shards = [ ]
-        for shard in shards:
-            left, right = json.loads(shard)
-            assert isinstance(left, basestring)
-            assert right is None or isinstance(right, basestring)
-            parsed_shards.append((urllib.unquote(left), urllib.unquote(right) if right is not None else None))
-        parsed_shards.sort()
-        last_split = u""
-        for left, right in parsed_shards:
-            assert left == last_split
-            if right is not None:
-                splits.append(right)
-            last_split = right
-        assert last_split is None
-        assert sorted(splits) == splits
-        return splits
-
-    def add_shard(self, split_point):
-        if isinstance(split_point, str):
-            split_point = unicode(split_point)
-        assert split_point not in self.shards
-        self.shards.append(split_point)
-        self.shards.sort()
-
-    def remove_shard(self, split_point):
-        if isinstance(split_point, str):
-            split_point = unicode(split_point)
-        assert split_point in self.shards
-        self.shards.remove(split_point)
-
-    def __str__(self):
-        return "RDB" + Namespace.__str__(self)
-
-namespace_classes_by_protocol_name = {
-    "dummy": DummyNamespace,
-    "memcached": MemcachedNamespace,
-    "rdb": RDBNamespace
-    }
+    def __init__(self):
+        raise Exception("Use the new Table class instead of RDBNamespace")
 
 class Machine(object):
     def __init__(self, uuid, json_data):
@@ -336,9 +277,7 @@ class ClusterAccess(object):
 
         self.machines = { }
         self.datacenters = { }
-        self.dummy_namespaces = { }
-        self.memcached_namespaces = { }
-        self.rdb_namespaces = { }
+        self.tables = { }
         self.databases = { }
         self.conflicts = [ ]
 
@@ -383,13 +322,9 @@ class ClusterAccess(object):
         retval += "\nDatabases:"
         for i in self.datagbases.iterkeys():
             retval += "\n%s: %s" % (i, self.databases[i])
-        retval += "\nNamespaces:"
-        for i in self.dummy_namespaces.iterkeys():
-            retval += "\n%s: %s" % (i, self.dummy_namespaces[i])
-        for i in self.memcached_namespaces.iterkeys():
-            retval += "\n%s: %s" % (i, self.memcached_namespaces[i])
-        for i in self.rdb_namespaces.iterkeys():
-            retval += "\n%s: %s" % (i, self.rdb_namespaces[i])
+        retval += "\nTables:"
+        for i in self.tables.iterkeys():
+            retval += "\n%s: %s" % (i, self.tables[i])
         return retval
 
     def print_machines(self):
@@ -397,12 +332,8 @@ class ClusterAccess(object):
             print "%s: %s" % (i, self.machines[i])
 
     def print_namespaces(self):
-        for i in self.dummy_namespaces.iterkeys():
-            print "%s: %s" % (i, self.dummy_namespaces[i])
-        for i in self.memcached_namespaces.iterkeys():
-            print "%s: %s" % (i, self.memcached_namespaces[i])
-        for i in self.rdb_namespaces.iterkeys():
-            print "%s: %s" % (i, self.rdb_namespaces[i])
+        for i in self.tables.iterkeys():
+            print "%s: %s" % (i, self.tables[i])
 
     def print_datacenters(self):
         for i in self.datacenters.iterkeys():
@@ -463,10 +394,8 @@ class ClusterAccess(object):
 
     def find_namespace(self, what):
         nss = {}
-        nss.update(self.dummy_namespaces)
-        nss.update(self.memcached_namespaces)
-        nss.update(self.rdb_namespaces)
-        return self._find_thing(what, Namespace, "namespace", nss)
+        nss.update(self.tables)
+        return self._find_thing(what, Table, "namespace", nss)
 
     def get_directory(self):
         return self.do_query("GET", "/ajax/directory")
@@ -498,7 +427,7 @@ class ClusterAccess(object):
         namespace = self.find_namespace(namespace)
         primary = None if primary is None else self.find_datacenter(primary)
         namespace.primary_uuid = primary.uuid
-        self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/primary_uuid" % (namespace.protocol, namespace.uuid), primary.uuid)
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/primary_uuid" % (namespace.uuid), primary.uuid)
         self.update_cluster_data(10)
 
     def set_namespace_affinities(self, namespace, affinities = { }):
@@ -507,7 +436,7 @@ class ClusterAccess(object):
         for datacenter, count in affinities.iteritems():
             aff_dict[self.find_datacenter(datacenter).uuid] = count
         namespace.replica_affinities.update(aff_dict)
-        self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/replica_affinities" % (namespace.protocol, namespace.uuid), aff_dict)
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/replica_affinities" % (namespace.uuid), aff_dict)
         self.update_cluster_data(10)
 
     def set_namespace_ack_expectations(self, namespace, ack_expectations = { }):
@@ -522,11 +451,10 @@ class ClusterAccess(object):
                 namespace.ack_expectations[dc.uuid].update({ "expectation": count })
             else:
                 namespace.ack_expectations[dc.uuid] = { "expectation": count,  "hard_durability": True }
-        self.do_query("POST", "/ajax/semilattice/%s_namespaces/%s/ack_expectations" % (namespace.protocol, namespace.uuid), ae_dict)
+        self.do_query("POST", "/ajax/semilattice/rdb_namespaces/%s/ack_expectations" % (namespace.uuid), ae_dict)
         self.update_cluster_data(10)
 
-    def add_namespace(self, protocol = "memcached", name = None, port = None, primary = None, affinities = { }, ack_expectations = { }, primary_key = None, database = None, check = False):
-        assert protocol in ["dummy", "memcached", "rdb"]
+    def add_namespace(self, name = None, port = None, primary = None, affinities = { }, ack_expectations = { }, primary_key = None, database = None, check = False):
         if port is None:
             port = random.randint(10000, 20000)
             if protocol == "rdb":
@@ -589,9 +517,7 @@ class ClusterAccess(object):
 
     def rename(self, target, name):
         types = {
-            DummyNamespace: (self.dummy_namespaces, "dummy_namespaces"),
-            MemcachedNamespace: (self.memcached_namespaces, "memcached_namespaces"),
-            RDBNamespace: (self.rdb_namespaces, "rdb_namespaces"),
+            Table: (self.tables, "rdb_namespaces"),
             Machine: (self.machines, "machines"),
             Datacenter: (self.datacenters, "datacenters")
             }
@@ -607,9 +533,7 @@ class ClusterAccess(object):
         assert conflict in self.conflicts
         assert value in conflict.values
         types = {
-            DummyNamespace: (self.dummy_namespaces, "dummy_namespaces"),
-            MemcachedNamespace: (self.memcached_namespaces, "memcached_namespaces"),
-            RDBNamespace: (self.rdb_namespaces, "rdb_namespaces"),
+            Table: (self.tables, "rdb_namespaces"),
             Machine: (self.machines, "machines"),
             Datacenter: (self.datacenters, "datacenters")
             }
@@ -747,8 +671,6 @@ class ClusterAccess(object):
                     del d[key]
         remove_nones(expected[u"machines"])
         remove_nones(expected[u"datacenters"])
-        remove_nones(expected[u"dummy_namespaces"])
-        remove_nones(expected[u"memcached_namespaces"])
         remove_nones(expected[u"rdb_namespaces"])
         return expected
 
@@ -777,16 +699,12 @@ class ClusterAccess(object):
     def _verify_cluster_data(self, data):
         self._verify_cluster_data_chunk(self.machines, data[u"machines"])
         self._verify_cluster_data_chunk(self.datacenters, data[u"datacenters"])
-        self._verify_cluster_data_chunk(self.dummy_namespaces, data[u"dummy_namespaces"])
-        self._verify_cluster_data_chunk(self.memcached_namespaces, data[u"memcached_namespaces"])
-        self._verify_cluster_data_chunk(self.rdb_namespaces, data[u"rdb_namespaces"])
+        self._verify_cluster_data_chunk(self.tables, data[u"rdb_namespaces"])
 
     def update_cluster_data(self, timeout):
         data = self._verify_consistent_cluster(timeout)
         self._pull_cluster_data(data[u"machines"], self.machines, Machine)
         self._pull_cluster_data(data[u"datacenters"], self.datacenters, Datacenter)
-        self._pull_cluster_data(data[u"dummy_namespaces"], self.dummy_namespaces, DummyNamespace)
-        self._pull_cluster_data(data[u"memcached_namespaces"], self.memcached_namespaces, MemcachedNamespace)
-        self._pull_cluster_data(data[u"rdb_namespaces"], self.rdb_namespaces, RDBNamespace)
+        self._pull_cluster_data(data[u"rdb_namespaces"], self.tables, Table)
         self._verify_cluster_data(data)
         return data
