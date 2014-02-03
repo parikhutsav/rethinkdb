@@ -1,6 +1,7 @@
 from multiprocessing import Process, Semaphore
 from threading import Thread
 import signal
+import test.common.vcoptparse
 
 def run(all_tests, args):
     filter = TestFilter.parse(args)
@@ -190,7 +191,7 @@ class TestTree(Test):
             except KeyError:
                 pass
         else:
-                self.tests[name] = test
+            self.tests[name] = test
                 
     def __iter__(self):
         for name in sorted(self.tests.keys()):
