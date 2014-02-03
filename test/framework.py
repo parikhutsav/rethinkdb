@@ -1,13 +1,25 @@
 from multiprocessing import Process, Semaphore
 from threading import Thread
 import signal
-import test.common.vcoptparse
+from argparse import ArgumentParser
+import sys
+
+parser = ArgumentParser(description='Run RethinkDB tests')
+parser.add_argument('-j', '--jobs', type=int, default=1)
+parser.add_argument('-t', '--timeout', type=int, default=600,
+                    help='Timeout in seconds for each test')
+parser.add_argument('filter', nargs='*',
+                    help='The name of the tests to run')
 
 def run(all_tests, args):
-    filter = TestFilter.parse(args)
+    args = parser.parse_args(args)
+    filter = TestFilter.parse(args.filter)
     tests = all_tests.filter(filter)
+    
     filter.check_use()
-    testrunner = TestRunner(tests, tasks=3)
+    testrunner = TestRunner(tests,
+                            tasks=args.jobs,
+                            timeout=args.timeout)
     testrunner.run()
 
 class TestRunner():
@@ -35,9 +47,14 @@ class TestProcess():
         self.process = None
 
     def start(self):
-        self.supervisor = Thread(target=self.supervise,
-                                 name="supervisor:"+self.name)
-        self.supervisor.start()
+        self.runner.semaphore.acquire()
+        try:
+            self.supervisor = Thread(target=self.supervise,
+                                     name="supervisor:"+self.name)
+            self.supervisor.start()
+        except Exception:
+            self.runner.semaphore.release()
+            raise
 
     def run(self):
         with Timeout(self.timeout):
@@ -46,19 +63,24 @@ class TestProcess():
             except TimeoutException:
                 print "Test timed out:", self.name
             except Exception as e:
-                print "Test failed:", self.name, e
+                print "Test failed:", self.name
             else:
                 print "Test passed:", self.name
 
     def supervise(self):
-        with self.runner.semaphore:
+        try:
             self.process = Process(target=self.run,
-                                   name="process:"+self.name)
+                                   name="subprocess:"+self.name)
             self.process.start()
             self.process.join(self.timeout + 5)
             if self.process.is_alive():
                 print "Terminating test:", self.name
                 self.process.terminate()
+            elif self.process.exitcode:
+                print "Test failed abnormally:", self.name
+        finally:
+            self.runner.semaphore.release()
+                
 
     def join(self):
         self.supervisor.join()
@@ -125,7 +147,7 @@ class TestFilter:
             subfilter = TestFilter(self.default)
             if create:
                 self.tree[name] = subfilter
-                return subfilter
+            return subfilter
         
     def check_use(self, path=[]):
         if not self.was_matched:
@@ -160,6 +182,9 @@ class Test:
 
     def timeout(self):
         return self._timeout
+
+    def requirements(self):
+        return []
         
 class TestTree(Test):
     def __init__(self, tests={}):
@@ -201,3 +226,11 @@ class TestTree(Test):
                 else:
                     yield name, test
 
+    def requirements(self):
+        for test in self.tests.values():
+            for req in test.requirements():
+                yield req        
+                    
+    def configure(self, conf):
+        for test in self.tests.values():
+            test.configure(conf)

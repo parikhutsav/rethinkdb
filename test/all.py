@@ -1,5 +1,6 @@
 from test.framework import Test, TestTree
 import time
+import test.unit
 
 def delme(x):
     def f():
@@ -7,15 +8,15 @@ def delme(x):
             raise Exception("failed")
     return f
 
-def long():
-    time.sleep(10)
+def wait():
+    time.sleep(2)
 
 tests = TestTree({
-    'delme1': Test(delme(False)),
-    'delme2': Test(delme(True)),
-    'delme3': Test(delme(False)),
-    'long1': Test(long, timeout=5),
-    'long2': Test(long, timeout=5),
-    'long3': Test(long, timeout=5),
-    'long4': Test(long, timeout=5)
+    'dummy': TestTree({
+        'pass': Test(delme(False)),
+        'fail': Test(delme(True)),
+        'timeout': Test(wait, timeout=1),
+        'notimeout': Test(wait),
+    }),
+    'unit': test.common.unit.UnitTests()
 })
