@@ -8,6 +8,7 @@ from os.path import abspath, join, dirname, pardir
 from os import mkdir, dup2
 import traceback
 import subprocess
+import time
 
 parser = ArgumentParser(description='Run RethinkDB tests')
 parser.add_argument('-j', '--jobs', type=int, default=1,
@@ -93,44 +94,54 @@ class TestRunner():
         self.view = TermView(self) if sys.stdout.isatty() and not verbose else TextView(self)
         
     def run(self):
-        print "Running %d tests (output_dir: %s)" % (len(self.tests), self.dir)
+        try:
+            print "Running %d tests (output_dir: %s)" % (len(self.tests), self.dir)
 
-        for i in range(0, self.repeat):
-            for name, test in self.tests: 
-                if self.kontinue or name not in self.failed_set:
-                    id = (name, i)
-                    dir = join(self.dir, name if self.repeat == 1 else name + '.' + str(i+1))
-                    process = TestProcess(self, id, test, dir)
-                    with self.running as running:
-                        running[id] = process
-                    process.start()
+            for i in range(0, self.repeat):
+                for name, test in self.tests:
+                    self.semaphore.acquire()
+                    if self.kontinue or name not in self.failed_set:
+                        id = (name, i)
+                        dir = join(self.dir, name if self.repeat == 1 else name + '.' + str(i+1)) 
+                        process = TestProcess(self, id, test, dir)
+                        with self.running as running:
+                            running[id] = process
+                        process.start()
+                    else:
+                        self.semaphore.release()
 
-        # loop through the remaining TestProcesses and wait for them to finish
-        while True:
+            # loop through the remaining TestProcesses and wait for them to finish
+            while True:
+                with self.running as running:
+                    if not running:
+                        break
+                    id, process = running.iteritems().next()
+                process.join()
+                with self.running as running:
+                    try: 
+                        del(running[id])
+                    except KeyError:
+                        pass
+                    else:
+                        process.write_fail_message("Test failed to report success or"
+                                                   " failure status") 
+                        self.tell(self.FAILED, id)
+        #except KeyboardInterrupt:
+        #    print >>sys.stderr, "Aborting tests"
+        finally:
             with self.running as running:
-                if not running:
-                    break
-                id, process = running.iteritems().next()
-            process.join()
-            with self.running as running:
-                try: 
-                    del(running[id])
-                except KeyError:
-                    pass
-                else:
-                    process.write_fail_message("Test failed to report success or"
-                                               " failure status") 
-                    self.tell(self.FAILED, id)
-
-        self.view.close()
+                for id, process in running.iteritems():
+                    process.terminate()
+            self.view.close()
 
     def tell(self, status, id):
         name = id[0]
-        if status != 'STARTED':
+        if status != 'STARTED': 
             with self.running as running:
                 del(running[id])
             if status != 'SUCCESS':
                 self.failed_set.add(name)
+            self.semaphore.release()
         self.view.tell(status, name)
 
     def count_running(self):
@@ -246,7 +257,6 @@ class TestProcess():
         self.dir = dir
 
     def start(self):
-        self.runner.semaphore.acquire()
         try:
             self.runner.tell(TestRunner.STARTED, self.id)
             mkdir(self.dir)
@@ -255,7 +265,6 @@ class TestProcess():
             self.supervisor.daemon = True
             self.supervisor.start()
         except Exception:
-            self.runner.semaphore.release()
             raise
 
     def run(self, write_pipe):
@@ -278,36 +287,36 @@ class TestProcess():
             file.write(message)
                 
     def supervise(self):
-        try:
-            read_pipe, write_pipe = Pipe(False)
-            self.process = Process(target=self.run, args=[write_pipe],
+        read_pipe, write_pipe = Pipe(False)
+        self.process = Process(target=self.run, args=[write_pipe],
                                    name="subprocess:"+self.name)
-            self.process.start()
-            self.process.join(self.timeout + 5)
-            if self.process.is_alive():
-                self.process.terminate()
-                self.write_fail_message("Test failed to exit after timeout of %d seconds"
+        self.process.start()
+        self.process.join(self.timeout + 5)
+        if self.process.is_alive():
+            self.process.terminate()
+            self.write_fail_message("Test failed to exit after timeout of %d seconds"
                                         % (self.timeout,))
-                self.runner.tell(TestRunner.FAILED, self.id)
-            elif self.process.exitcode:
-                self.write_fail_message("Test exited abnormally with error code %d"
+            self.runner.tell(TestRunner.FAILED, self.id)
+        elif self.process.exitcode:
+            self.write_fail_message("Test exited abnormally with error code %d"
                                         % (self.process.exitcode,))
-                self.runner.tell(TestRunner.FAILED, self.id)
-            else:
-                try:
-                    write_pipe.close()
-                    status = read_pipe.recv()
-                except EOFError:
-                    self.write_fail_message("Test did not fail, but"
-                                            " failed to report its success")
-                    status = TestRunner.FAILED
-                self.runner.tell(status, self.id)
-        finally:
-            self.runner.semaphore.release()
+            self.runner.tell(TestRunner.FAILED, self.id)
+        else:
+            try:
+                write_pipe.close()
+                status = read_pipe.recv()
+            except EOFError:
+                self.write_fail_message("Test did not fail, but"
+                                        " failed to report its success")
+                status = TestRunner.FAILED
+            self.runner.tell(status, self.id)
                 
-
     def join(self):
         self.supervisor.join()
+
+    def terminate(self):
+        if self.process:
+            self.process.terminate()
 
 class TimeoutException(Exception):
     pass
