@@ -1,6 +1,6 @@
-from test.framework import Test, TestTree, SimpleTest
+from test.lib.framework import Test, TestTree, SimpleTest
 import time
-import test.common.unit
+from test.unit import AllUnitTests
 import sys
 
 def dummy(x):
@@ -20,5 +20,5 @@ tests = TestTree({
         'notimeout': SimpleTest(wait),
         'print': SimpleTest(lambda: sys.stdout.write('hello\n'))
     }),
-    'unit': test.common.unit.AllUnitTests()
+    'unit': AllUnitTests()
 })

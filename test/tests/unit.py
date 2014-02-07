@@ -1,5 +1,5 @@
 from os.path import abspath, join, dirname, pardir
-from test.framework import Test, TestTree
+from test.lib.framework import Test, TestTree
 from subprocess import check_output, check_call
 from collections import defaultdict
 
@@ -14,7 +14,7 @@ class AllUnitTests(Test):
         return AllUnitTests(self.filters + [filter])
 
     def configure(self, conf):
-        unit_executable = abspath(join(dirname(__file__), pardir, pardir, "build", "debug", "rethinkdb-unittest"))
+        unit_executable = abspath(join(conf['SRC_ROOT'], "build", "debug", "rethinkdb-unittest"))
         output = check_output([unit_executable, "--gtest_list_tests"])
         key = None
         dict = defaultdict(list)

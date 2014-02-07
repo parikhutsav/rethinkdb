@@ -6,7 +6,7 @@ from os.path import abspath, join, dirname, pardir
 sys.path.insert(0, abspath(join(dirname(__file__), pardir)))
 sys.path.insert(0, abspath(join(dirname(__file__), pardir, "build", "packages", "python")))
 
-from test.framework import run
+from test.lib.framework import run
 from test.all import tests
 
 if __name__ == '__main__':

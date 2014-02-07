@@ -1,9 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2010-2012 RethinkDB, all rights reserved.
 import sys, os, time
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir, 'common')))
-import http_admin, driver, workload_runner, scenario_common
-from vcoptparse import *
+# import http_admin, driver, workload_runner, scenario_common
 
 class ReplicaSequence(object):
     def __init__(self, string):

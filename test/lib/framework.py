@@ -1,11 +1,11 @@
-from multiprocessing import Process, Semaphore, Pipe
-from threading import Thread, Lock
+import multiprocessing
+import threading
 import signal
 from argparse import ArgumentParser
 import sys
-from tempfile import mkdtemp
+import tempfile
 from os.path import abspath, join, dirname, pardir
-from os import mkdir, dup2
+import os
 import traceback
 import subprocess
 import time
@@ -52,7 +52,7 @@ def run(all_tests, args):
 def configure(reqs):
     # TODO
    return dict(
-       SRC_ROOT = abspath(join(dirname(__file__), pardir)))
+       SRC_ROOT = abspath(join(dirname(__file__), pardir, pardir)))
 
 def redirect_fd_to_file(fd, file, tee=False):
     if not tee:
@@ -60,7 +60,7 @@ def redirect_fd_to_file(fd, file, tee=False):
     else:
         tee = subprocess.Popen(["tee", file], stdin=subprocess.PIPE)
         f = tee.stdin
-    dup2(f.fileno(), fd)
+    os.dup2(f.fileno(), fd)
     
 
 class TestRunner():
@@ -71,7 +71,7 @@ class TestRunner():
     
     def __init__(self, tests, conf, tasks=1, timeout=600, output_dir=None, verbose=False, repeat=1, kontinue=False):
         self.tests = tests
-        self.semaphore = Semaphore(tasks)
+        self.semaphore = multiprocessing.Semaphore(tasks)
         self.processes = []
         self.timeout = timeout
         self.conf = conf
@@ -83,19 +83,26 @@ class TestRunner():
         if output_dir:
             self.dir = output_dir
             try:
-                mkdir(output_dir)
+                os.mkdir(output_dir)
             except OSError as e:
                 print >> sys.stderr, "Could not create output directory (" + output_dir + "):", e
                 sys.exit(1)
         else:
-            self.dir = mkdtemp('', 'test_results.', conf['SRC_ROOT'])
+            tr_dir = join(conf['SRC_ROOT'],'build/test_results/') 
+            try:
+                os.makedirs(tr_dir)
+            except OSError:
+                pass
+            timestamp = time.strftime('%Y-%m-%dT%H:%M:%S.')
+            self.dir = tempfile.mkdtemp('', timestamp, tr_dir)
         
         self.running = Locked({})
         self.view = TermView(self) if sys.stdout.isatty() and not verbose else TextView(self)
         
     def run(self):
         try:
-            print "Running %d tests (output_dir: %s)" % (len(self.tests), self.dir)
+            test_count = len(self.tests)
+            print "Running %d tests (output_dir: %s)" % (test_count, self.dir)
 
             for i in range(0, self.repeat):
                 for name, test in self.tests:
@@ -126,15 +133,20 @@ class TestRunner():
                         process.write_fail_message("Test failed to report success or"
                                                    " failure status") 
                         self.tell(self.FAILED, id)
-        #except KeyboardInterrupt:
-        #    print >>sys.stderr, "Aborting tests"
+        except KeyboardInterrupt:
+            print >>sys.stderr, "Aborting tests"
         finally:
             with self.running as running:
                 for id, process in running.iteritems():
                     process.terminate()
             self.view.close()
+        if len(self.failed_set):
+            print "%d of %d tests failed" % (len(self.failed_set), test_count)
+        else:
+            print "All tests passed successfully"
+        print "Saved test results to %s" % (self.dir,)
 
-    def tell(self, status, id):
+    def tell(self, status, id, testprocess):
         name = id[0]
         if status != 'STARTED': 
             with self.running as running:
@@ -142,7 +154,10 @@ class TestRunner():
             if status != 'SUCCESS':
                 self.failed_set.add(name)
             self.semaphore.release()
-        self.view.tell(status, name)
+        args = {}
+        if status == 'FAILED':
+             args = dict(error = testprocess.tail_error())
+        self.view.tell(status, name, **args)
 
     def count_running(self):
         with self.running as running:
@@ -157,20 +172,24 @@ class TextView():
         self.runner = runner
         self.use_color = sys.stdout.isatty()
 
-    def tell(self, event, name):
+    def tell(self, event, name, **args):
         if event != 'STARTED':
-            print self.format_event(event, name)
+            print self.format_event(event, name, **args)
 
-    def format_event(self, str, name):
+    def format_event(self, str, name, error=None):
         short = dict(
             FAILED = (self.red, "FAIL"),
             SUCCESS = (self.green, "OK  "),
             TIMED_OUT = (self.red, "TIME")
         )[str]
+        buf = ''
+        if error:
+            buf += error + '\n'
         if self.use_color:
-            return short[0] + short[1] + " " + name + self.nocolor
+            buf += short[0] + short[1] + " " + name + self.nocolor
         else:
-            return short[1] + " " + name
+            buf += short[1] + " " + name
+        return buf
 
     def close(self):
         pass
@@ -180,26 +199,26 @@ class TermView(TextView):
         TextView.__init__(self, runner)
         self.running_count = 0
         self.buffer = ''
-        self.read_pipe, self.write_pipe = Pipe(False)
-        self.thread = Thread(target=self.run, name='TermView')
+        self.read_pipe, self.write_pipe = multiprocessing.Pipe(False)
+        self.thread = threading.Thread(target=self.run, name='TermView')
         self.thread.daemon = True
         self.thread.start()
 
-    def tell(self, *args):
-        self.write_pipe.send(args)
+    def tell(self, *args, **kwargs):
+        self.write_pipe.send((args, kwargs))
 
     def close(self):
-        self.write_pipe.send('EXIT')
+        self.write_pipe.send(('EXIT',None))
         self.thread.join()
         
     def run(self):
         while True:
-            args = self.read_pipe.recv()
+            args, kwargs = self.read_pipe.recv()
             if args == 'EXIT':
                 break
-            self.thread_tell(*args)
+            self.thread_tell(*args, **kwargs)
         
-    def thread_tell(self, event, name):
+    def thread_tell(self, event, name, **kwargs):
         if event == 'STARTED':
             self.running_count += 1
             self.update_status()
@@ -209,7 +228,7 @@ class TermView(TextView):
                 color = self.green
             else:
                 color = self.red
-            self.show(self.format_event(event, name))
+            self.show(self.format_event(event, name, **kwargs))
         self.flush()
 
     def update_status(self):
@@ -236,7 +255,7 @@ class TermView(TextView):
 class Locked():
     def __init__(self, value=None):
         self.value = value
-        self.lock = Lock()
+        self.lock = threading.Lock()
 
     def __enter__(self):
         self.lock.acquire()
@@ -258,10 +277,10 @@ class TestProcess():
 
     def start(self):
         try:
-            self.runner.tell(TestRunner.STARTED, self.id)
-            mkdir(self.dir)
-            self.supervisor = Thread(target=self.supervise,
-                                     name="supervisor:"+self.name)
+            self.runner.tell(TestRunner.STARTED, self.id, self)
+            os.mkdir(self.dir)
+            self.supervisor = threading.Thread(target=self.supervise,
+                                               name="supervisor:"+self.name)
             self.supervisor.daemon = True
             self.supervisor.start()
         except Exception:
@@ -271,13 +290,15 @@ class TestProcess():
         sys.stdin.close()
         redirect_fd_to_file(1, join(self.dir, "stdout"), tee=self.runner.verbose)
         redirect_fd_to_file(2, join(self.dir, "stderr"), tee=self.runner.verbose)
+        os.chdir(self.dir)
         with Timeout(self.timeout):
             try:
                 self.test.run()
             except TimeoutException:
                 write_pipe.send(TestRunner.TIMED_OUT)
-            except Exception:
-                sys.stderr.write(traceback.format_exc() + '\n')
+            except Exception as e:
+                # sys.stderr.write(traceback.format_exc() + '\n')
+                print >>sys.stderr, e
                 write_pipe.send(TestRunner.FAILED)
             else:
                 write_pipe.send(TestRunner.SUCCESS)
@@ -285,22 +306,31 @@ class TestProcess():
     def write_fail_message(self, message):
         with open(join(self.dir, "stderr"), 'a') as file:
             file.write(message)
-                
+
+    def tail_error(self):
+        with open(join(self.dir, "stderr")) as f:
+            lines = f.read().split('\n')[-10:]
+        if len(lines) < 10:
+            with open(join(self.dir, "stdout")) as f:
+                lines = f.read().split('\n')[-len(lines):] + lines 
+        return '\n'.join(lines)
+            
+            
     def supervise(self):
-        read_pipe, write_pipe = Pipe(False)
-        self.process = Process(target=self.run, args=[write_pipe],
-                                   name="subprocess:"+self.name)
+        read_pipe, write_pipe = multiprocessing.Pipe(False)
+        self.process = multiprocessing.Process(target=self.run, args=[write_pipe],
+                                               name="subprocess:"+self.name)
         self.process.start()
         self.process.join(self.timeout + 5)
         if self.process.is_alive():
             self.process.terminate()
             self.write_fail_message("Test failed to exit after timeout of %d seconds"
                                         % (self.timeout,))
-            self.runner.tell(TestRunner.FAILED, self.id)
+            self.runner.tell(TestRunner.FAILED, self.id, self)
         elif self.process.exitcode:
             self.write_fail_message("Test exited abnormally with error code %d"
                                         % (self.process.exitcode,))
-            self.runner.tell(TestRunner.FAILED, self.id)
+            self.runner.tell(TestRunner.FAILED, self.id, self)
         else:
             try:
                 write_pipe.close()
@@ -309,7 +339,7 @@ class TestProcess():
                 self.write_fail_message("Test did not fail, but"
                                         " failed to report its success")
                 status = TestRunner.FAILED
-            self.runner.tell(status, self.id)
+            self.runner.tell(status, self.id, self)
                 
     def join(self):
         self.supervisor.join()
