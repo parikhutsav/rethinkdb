@@ -1,6 +1,10 @@
-from test.lib.framework import test
-from test.scenarios import MoreOrLessSecondaries
-from test.workloads.stress import Stress
+from lib.framework import TestTree
+from scenarios.more_or_less_secondaries import MoreOrLessSecondaries
+from workloads.stress import Stress
+
+# TODO
+
+tests = TestTree()
 
 def heavy_backfilling():
     MoreOrLessSecondaries(

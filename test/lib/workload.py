@@ -1,8 +1,5 @@
-# Copyright 2010-2012 RethinkDB, all rights reserved.
+# Copyright 2010-2013 RethinkDB, all rights reserved.
 import subprocess, os, time, string, signal
-from vcoptparse import *
-
-# TODO: Merge this file into `scenario_common.py`?
 
 class RDBPorts(object):
     def __init__(self, host, http_port, rdb_port, db_name, table_name):
@@ -17,6 +14,7 @@ class RDBPorts(object):
         env["PORT"] = str(self.rdb_port)
         env["DB_NAME"] = self.db_name
         env["TABLE_NAME"] = self.table_name
+
 #TODO
 unique_thing = {}
 

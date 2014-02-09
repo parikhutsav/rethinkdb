@@ -1,5 +1,5 @@
 from os.path import abspath, join, dirname, pardir
-from test.lib.framework import Test, TestTree
+from lib.framework import Test, TestTree
 from subprocess import check_output, check_call
 from collections import defaultdict
 
