@@ -6,7 +6,7 @@ from lib.cluster import Cluster
 from lib.scenario import Scenario
 # import http_admin, driver, workload_runner, scenario_common
 
-class ReplicaSequence:
+class ReplicaSequence(object):
     def __init__(self, steps):
         self.initial = current = steps[0]
         self.totals = []

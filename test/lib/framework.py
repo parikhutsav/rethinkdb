@@ -63,7 +63,7 @@ def redirect_fd_to_file(fd, file, tee=False):
     os.dup2(f.fileno(), fd)
     
 
-class TestRunner():
+class TestRunner(object):
     SUCCESS = 'SUCCESS'
     FAILED = 'FAILED'
     TIMED_OUT = 'TIMED_OUT'
@@ -163,7 +163,7 @@ class TestRunner():
         with self.running as running:
             return len(running)
 
-class TextView():
+class TextView(object):
     green = "\033[32;1m"
     red = "\033[31;1m"
     nocolor = "\033[0m"
@@ -252,7 +252,7 @@ class TermView(TextView):
         self.buffer = ''
         sys.stdout.flush()
         
-class Locked():
+class Locked(object):
     def __init__(self, value=None):
         self.value = value
         self.lock = threading.Lock()
@@ -264,7 +264,7 @@ class Locked():
     def __exit__(self, e, x, c):
         self.lock.release()
             
-class TestProcess():
+class TestProcess(object):
     def __init__(self, runner, id, test, dir):
         self.runner = runner
         self.id = id
@@ -351,7 +351,7 @@ class TestProcess():
 class TimeoutException(Exception):
     pass
         
-class Timeout:
+class Timeout(object):
     def __init__(self, seconds):
         self.timeout = seconds
 
@@ -366,7 +366,7 @@ class Timeout:
     def alarm(*ignored):
         raise TimeoutException()
         
-class TestFilter:
+class TestFilter(object):
     INCLUDE = 'INCLUDE'
     EXCLUDE = 'EXCLUDE'
 
@@ -426,7 +426,7 @@ class TestFilter:
         self.was_matched = True
         return not self.tree
             
-class Test:
+class Test(object):
     def __init__(self, timeout=None):
         self._timeout = timeout
 
