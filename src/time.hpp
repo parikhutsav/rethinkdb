@@ -4,18 +4,18 @@
 #include <stdint.h>
 #include <time.h>
 
-typedef uint64_t microtime_t;
+typedef uint64_t ticks_t;
 
-microtime_t current_microtime();
+timespec clock_realtime();
+time_t get_secs();
 
 timespec clock_monotonic();
-timespec clock_realtime();
-
-typedef uint64_t ticks_t;
-ticks_t secs_to_ticks(time_t secs);
 ticks_t get_ticks();
-time_t get_secs();
+
+ticks_t secs_to_ticks(time_t secs);
 double ticks_to_secs(ticks_t ticks);
 
+typedef uint64_t microtime_t;
+microtime_t current_microtime();
 
 #endif  // TIME_HPP_

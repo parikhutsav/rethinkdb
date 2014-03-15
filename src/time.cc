@@ -11,14 +11,6 @@
 #include "config/args.hpp"
 #include "errors.hpp"
 
-microtime_t current_microtime() {
-    // This could be done more efficiently, surely.
-    struct timeval t;
-    DEBUG_VAR int res = gettimeofday(&t, NULL);
-    rassert(0 == res);
-    return uint64_t(t.tv_sec) * MILLION + t.tv_usec;
-}
-
 ticks_t secs_to_ticks(time_t secs) {
     return static_cast<ticks_t>(secs) * BILLION;
 }
@@ -67,7 +59,6 @@ timespec clock_realtime() {
 #endif
 }
 
-
 ticks_t get_ticks() {
     timespec tv = clock_monotonic();
     return secs_to_ticks(tv.tv_sec) + tv.tv_nsec;
@@ -80,5 +71,13 @@ time_t get_secs() {
 
 double ticks_to_secs(ticks_t ticks) {
     return ticks / static_cast<double>(BILLION);
+}
+
+microtime_t current_microtime() {
+    // This could be done more efficiently, surely.
+    struct timeval t;
+    DEBUG_VAR int res = gettimeofday(&t, NULL);
+    rassert(0 == res);
+    return static_cast<int64_t>(t.tv_sec) * MILLION + t.tv_usec;
 }
 
