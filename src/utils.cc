@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -226,9 +225,8 @@ void *rrealloc(void *ptr, size_t size) {
 rng_t::rng_t(int seed) {
 #ifndef NDEBUG
     if (seed == -1) {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        seed = tv.tv_usec;
+        const struct timespec ts = clock_realtime();
+        seed = ts.tv_nsec;
     }
 #else
     seed = 314159;
