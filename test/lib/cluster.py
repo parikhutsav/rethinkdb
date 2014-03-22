@@ -1,6 +1,6 @@
 # TODO: rename process to server
 # Copyright 2010-2013 RethinkDB, all rights reserved.
-import sys, os, time, socket, signal, subprocess, shutil, tempfile, random, re, logger
+import sys, os, time, socket, signal, subprocess, shutil, tempfile, random, re, logging
 from lib.resunder_client import block_path, unblock_path
 from lib.http_admin import HttpAdmin
 import lib.log
@@ -32,14 +32,14 @@ module. """
 #             mode = 'debug'
 #     return find_subpath("build/%s/rethinkdb" % mode)
 
-class Metacluster(HttpAdmin):
+class Metacluster(object):
     """A `Metacluster` is a group of clusters. It's responsible for maintaining
     `resunder` blocks between different clusters. It's also a context manager
     that cleans up all the servers and can delete all the files. """
 
     def __init__(self, dbs_path=None, keep_files=False, log=None):
         self.clusters = set()
-        self.log = log or logger.getLogger("default")
+        self.log = log or logging.getLogger("default")
         if not dbs_path:
             self.log.info("Creating temporary directory for databases")
             self.dbs_path = tempfile.mkdtemp()
@@ -96,7 +96,7 @@ class Metacluster(HttpAdmin):
         # TODO
         return random.randint(32768, 61000)
 
-class Cluster(HttpAdmin):
+class Cluster(object):
     """A `Cluster` represents a group of `Processes` that are all connected to
     each other (ideally, anyway; see the note in `move_processes`). """
 
@@ -355,7 +355,7 @@ class Process(_Process):
 
         options = ["serve",
                    "--directory", self.files.db_path,
-                   "--client-port", str(self.local_cluster_port)
+                   "--client-port", str(self.local_cluster_port),
                    "--cluster-port", "0",
                    "--driver-port", "0",
                    "--http-port", "0"

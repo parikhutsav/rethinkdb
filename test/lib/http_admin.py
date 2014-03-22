@@ -1,4 +1,4 @@
-# Copyright 2010-2012 RethinkDB, all rights reserved.
+# Copyright 2010-2014 RethinkDB, all rights reserved.
 import os
 import re
 import json
@@ -10,8 +10,7 @@ from httplib import HTTPConnection
 import urllib   # for `quote()` and `unquote()`
 
 """ The `http_admin.py` module is a Python wrapper around the HTTP interface to
-RethinkDB. It is not responsible for starting and stopping RethinkDB processes;
-use the `driver.py` module for that, or just start the processes manually.
+RethinkDB. It is not responsible for starting and stopping RethinkDB processes.
 
 Things currently not very well supported
  - Blueprints - proposals and checking of blueprint data is not implemented
