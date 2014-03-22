@@ -23,8 +23,8 @@ parser.add_argument('-v', '--verbose', action='store_true')
 parser.add_argument('-t', '--timeout', type=int, default=600,
                     help='Timeout in seconds for each test')
 parser.add_argument('filter', nargs='*',
-                    help='The name of the tests to run, of a group'
-                    'of tests or their negation with !')
+                    help='The name of the tests to run, or a group'
+                    'or tests or their negation with !')
 
 def run(all_tests, args):
     args = parser.parse_args(args)
