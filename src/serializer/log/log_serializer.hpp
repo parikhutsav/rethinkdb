@@ -1,4 +1,4 @@
-// Copyright 2010-2013 RethinkDB, all rights reserved.
+// Copyright 2010-2014 RethinkDB, all rights reserved.
 #ifndef SERIALIZER_LOG_LOG_SERIALIZER_HPP_
 #define SERIALIZER_LOG_LOG_SERIALIZER_HPP_
 
@@ -48,7 +48,6 @@ struct log_serializer_metablock_t {
     extent_manager_t::metablock_mixin_t extent_manager_part;
     lba_list_t::metablock_mixin_t lba_index_part;
     data_block_manager::metablock_mixin_t data_block_manager_part;
-    block_sequence_id_t block_sequence_id;
 } __attribute__((__packed__));
 
 //  Data to be serialized to disk with each block.  Changing this changes the disk format!
@@ -124,7 +123,6 @@ public:
     typedef log_serializer_dynamic_config_t dynamic_config_t;
     typedef log_serializer_static_config_t static_config_t;
 
-public:
 
     /* Blocks. Does not check for an existing database--use check_existing for that. */
     static void create(serializer_file_opener_t *file_opener, static_config_t static_config);
@@ -135,11 +133,6 @@ public:
     /* Blocks. */
     virtual ~log_serializer_t();
 
-public:
-    /* Implementation of the serializer_t API */
-    scoped_malloc_t<ser_buffer_t> malloc();
-    scoped_malloc_t<ser_buffer_t> clone(const ser_buffer_t *);
-
 #ifndef SEMANTIC_SERIALIZER_CHECK
     using serializer_t::make_io_account;
 #endif
@@ -148,19 +141,22 @@ public:
     void register_read_ahead_cb(serializer_read_ahead_callback_t *cb);
     void unregister_read_ahead_cb(serializer_read_ahead_callback_t *cb);
     block_id_t max_block_id();
-    repli_timestamp_t get_recency(block_id_t id);
+    segmented_vector_t<repli_timestamp_t> get_all_recencies(block_id_t first,
+                                                            block_id_t step);
 
     bool get_delete_bit(block_id_t id);
     counted_t<ls_block_token_pointee_t> index_read(block_id_t block_id);
 
     void block_read(const counted_t<ls_block_token_pointee_t> &token, ser_buffer_t *buf, file_account_t *io_account);
 
-    void index_write(const std::vector<index_write_op_t> &write_ops, file_account_t *io_account);
+    void index_write(new_mutex_in_line_t *mutex_acq,
+                     const std::vector<index_write_op_t> &write_ops,
+                     file_account_t *io_account);
 
     std::vector<counted_t<ls_block_token_pointee_t> > block_writes(const std::vector<buf_write_info_t> &write_infos,
                                                                    file_account_t *io_account, iocallback_t *cb);
 
-    block_size_t get_block_size() const;
+    block_size_t max_block_size() const;
 
     bool coop_lock_and_check();
 
@@ -175,26 +171,41 @@ private:
     void offer_buf_to_read_ahead_callbacks(
             block_id_t block_id,
             scoped_malloc_t<ser_buffer_t> &&buf,
-            const counted_t<standard_block_token_t>& token,
-            repli_timestamp_t recency_timestamp);
+            const counted_t<standard_block_token_t> &token);
     bool should_perform_read_ahead();
 
     /* Starts a new transaction, updates perfmons etc. */
     void index_write_prepare(extent_transaction_t *txn);
-    /* Finishes a write transaction */
-    void index_write_finish(extent_transaction_t *txn, file_account_t *io_account);
+    /* Finishes a write transaction.  Resets `*mutex_acq` once it's okay to send
+       another index_write. */
+    void index_write_finish(new_mutex_in_line_t *mutex_acq,
+                            extent_transaction_t *txn,
+                            file_account_t *io_account);
 
     /* This mess is because the serializer is still mostly FSM-based */
     bool shutdown(cond_t *cb);
     bool next_shutdown_step();
 
+    void delete_dbfile_and_continue_shutdown();
+
     virtual void on_datablock_manager_shutdown();
 
-    /* Prepare a new metablock, then wait until safe_to_write_cond is pulsed.
-    Finally write the new metablock to disk. Returns once the write is complete.
-    This function writes the metablock in the state that it has when called, i.e.
-    it does not block between calling and preparing the new metablock. */
-    void write_metablock(const signal_t &safe_to_write_cond, file_account_t *io_account);
+    /* Prepares a new metablock, then resets `*mutex_acq` once it's safe for another
+    pipelined call to write_metablock.  Then waits until safe_to_write_cond is
+    pulsed.  Finally write the new metablock to disk. Returns once the write is
+    complete.  This function writes the metablock in the state that it has when
+    called, i.e.  it does not block between calling and preparing the new metablock.
+    Use mutex_acq with a mutex you control if you want to extra-safely pipeline
+    operations from your caller. */
+    void write_metablock(new_mutex_in_line_t *mutex_acq,
+                         const signal_t *safe_to_write_cond,
+                         file_account_t *io_account);
+
+    // Used by the LBA gc operations to write metablocks -- it doesn't care to
+    // pipeline operations and so we don't expose that facility.
+    void write_metablock_sans_pipelining(const signal_t *safe_to_write_cond,
+                                         file_account_t *io_account);
+
 
     typedef log_serializer_metablock_t metablock_t;
     void prepare_metablock(metablock_t *mb_buffer);
@@ -223,7 +234,8 @@ private:
         shutdown_begin,
         shutdown_waiting_on_serializer,
         shutdown_waiting_on_datablock_manager,
-        shutdown_waiting_on_block_tokens
+        shutdown_waiting_on_block_tokens,
+        shutdown_waiting_on_dbfile_destruction,
     } shutdown_state;
     bool shutdown_in_one_shot;
 
@@ -248,8 +260,6 @@ private:
     std::list<cond_t *> metablock_waiter_queue;
 
     int active_write_count;
-
-    block_sequence_id_t latest_block_sequence_id;
 
     DISABLE_COPYING(log_serializer_t);
 };

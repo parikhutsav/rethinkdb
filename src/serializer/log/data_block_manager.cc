@@ -1,17 +1,16 @@
-// Copyright 2010-2013 RethinkDB, all rights reserved.
-#define __STDC_FORMAT_MACROS
-#define __STDC_LIMIT_MACROS
+// Copyright 2010-2014 RethinkDB, all rights reserved.
 #include "serializer/log/data_block_manager.hpp"
 
 #include <inttypes.h>
 #include <sys/uio.h>
 
-#include "utils.hpp"
+#include "errors.hpp"
 #include <boost/bind.hpp>
 
 #include "arch/arch.hpp"
 #include "arch/runtime/coroutines.hpp"
 #include "concurrency/mutex.hpp"
+#include "concurrency/new_mutex.hpp"
 #include "perfmon/perfmon.hpp"
 #include "serializer/log/log_serializer.hpp"
 #include "stl_utils.hpp"
@@ -641,7 +640,8 @@ public:
                     continue;
                 }
 
-                scoped_malloc_t<ser_buffer_t> data = parent->serializer->malloc();
+                scoped_malloc_t<ser_buffer_t> data
+                    = serializer_t::allocate_buffer(parent->serializer->max_block_size());
                 memcpy(data.get(), current_buf, info.ser_block_size);
                 guarantee(info.ser_block_size <= *(lower_it + 1) - *lower_it);
 
@@ -655,8 +655,7 @@ public:
                 parent->serializer->offer_buf_to_read_ahead_callbacks(
                         block_id,
                         std::move(data),
-                        token,
-                        info.recency);
+                        token);
             }
         }
 
@@ -703,7 +702,6 @@ void data_block_manager_t::read(int64_t off_in, uint32_t ser_block_size_in,
 
 std::vector<counted_t<ls_block_token_pointee_t> >
 data_block_manager_t::many_writes(const std::vector<buf_write_info_t> &writes,
-                                  bool assign_new_block_sequence_id,
                                   file_account_t *io_account,
                                   iocallback_t *cb) {
     // Either we're ready to write, or we're shutting down and just finished reading
@@ -718,10 +716,6 @@ data_block_manager_t::many_writes(const std::vector<buf_write_info_t> &writes,
 
     for (auto it = writes.begin(); it != writes.end(); ++it) {
         it->buf->ser_header.block_id = it->block_id;
-        if (assign_new_block_sequence_id) {
-            ++serializer->latest_block_sequence_id;
-            it->buf->ser_header.block_sequence_id = serializer->latest_block_sequence_id;
-        }
     }
 
     struct intermediate_cb_t : public iocallback_t {
@@ -739,7 +733,9 @@ data_block_manager_t::many_writes(const std::vector<buf_write_info_t> &writes,
     };
 
     intermediate_cb_t *const intermediate_cb = new intermediate_cb_t;
-    intermediate_cb->ops_remaining = token_groups.size();
+    // We add 1 for degenerate case where token_groups is empty -- we call
+    // intermediate_cb->on_io_complete later.
+    intermediate_cb->ops_remaining = token_groups.size() + 1;
     intermediate_cb->cb = cb;
 
     size_t write_number = 0;
@@ -779,6 +775,10 @@ data_block_manager_t::many_writes(const std::vector<buf_write_info_t> &writes,
         dbfile->writev_async(front_offset, write_size,
                              std::move(iovecs), io_account, intermediate_cb);
     }
+
+    // Call on_io_complete for degenerate case (we added 1 to ops_remaining
+    // earlier).
+    intermediate_cb->on_io_complete();
 
     std::vector<counted_t<ls_block_token_pointee_t> > ret;
     ret.reserve(writes.size());
@@ -957,7 +957,7 @@ void data_block_manager_t::gc_writer_t::write_gcs(gc_write_t *writes, size_t num
             }
 
             new_block_tokens
-                = parent->many_writes(the_writes, false, parent->choose_gc_io_account(),
+                = parent->many_writes(the_writes, parent->choose_gc_io_account(),
                                       &block_write_cond);
 
             guarantee(new_block_tokens.size() == num_writes);
@@ -1019,7 +1019,11 @@ void data_block_manager_t::gc_writer_t::write_gcs(gc_write_t *writes, size_t num
 
         // Step 4B: Commit the transaction to the serializer, emptying
         // out all the i_array bits.
-        parent->serializer->index_write(index_write_ops, parent->choose_gc_io_account());
+        new_mutex_in_line_t dummy_acq;  // We don't use the precise-locking feature
+                                        // of index_write.
+        parent->serializer->index_write(&dummy_acq,
+                                        index_write_ops,
+                                        parent->choose_gc_io_account());
 
         ASSERT_NO_CORO_WAITING;
 

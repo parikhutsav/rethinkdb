@@ -3,8 +3,9 @@
 
 #include <netinet/in.h>
 
+#include <functional>
+
 #include "errors.hpp"
-#include <boost/bind.hpp>
 #include <boost/optional.hpp>
 
 #include "arch/io/network.hpp"
@@ -18,6 +19,7 @@
 #include "containers/uuid.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
+#include "rpc/connectivity/heartbeat.hpp"
 
 // Number of messages after which the message handling loop yields
 #define MESSAGE_HANDLER_MAX_BATCH_SIZE           8
@@ -27,7 +29,7 @@ const std::string connectivity_cluster_t::cluster_version(RETHINKDB_CODE_VERSION
 
 #if defined (__x86_64__)
 const std::string connectivity_cluster_t::cluster_arch_bitsize("64bit");
-#elif defined (__i386__)
+#elif defined (__i386__) || defined(__arm__)
 const std::string connectivity_cluster_t::cluster_arch_bitsize("32bit");
 #else
 #error "Could not determine architecture"
@@ -114,8 +116,8 @@ connectivity_cluster_t::run_t::run_t(connectivity_cluster_t *p,
     connection_to_ourself(this, parent->me, NULL, routing_table[parent->me]),
 
     listener(new tcp_listener_t(cluster_listener_socket.get(),
-                                boost::bind(&connectivity_cluster_t::run_t::on_new_connection,
-                                            this, _1, auto_drainer_t::lock_t(&drainer))))
+                                std::bind(&connectivity_cluster_t::run_t::on_new_connection,
+                                          this, ph::_1, auto_drainer_t::lock_t(&drainer))))
 {
     rassert(message_handler != NULL);
     parent->assert_thread();
@@ -134,7 +136,7 @@ int connectivity_cluster_t::run_t::get_port() {
 
 void connectivity_cluster_t::run_t::join(const peer_address_t &address) THROWS_NOTHING {
     parent->assert_thread();
-    coro_t::spawn_now_dangerously(boost::bind(
+    coro_t::spawn_now_dangerously(std::bind(
         &connectivity_cluster_t::run_t::join_blocking,
         this,
         address,
@@ -193,7 +195,7 @@ connectivity_cluster_t::run_t::connection_entry_t::entry_installation_t::entry_i
                                                            std::make_pair(that_, auto_drainer_t::lock_t(&drainer_))));
         guarantee(res.second, "Map entry was not present.");
 
-        ti->publisher.publish(boost::bind(&ping_connection_watcher, that_->peer, _1));
+        ti->publisher.publish(std::bind(&ping_connection_watcher, that_->peer, ph::_1));
     }
 }
 
@@ -207,7 +209,7 @@ connectivity_cluster_t::run_t::connection_entry_t::entry_installation_t::~entry_
             = ti->connection_map.find(that_->peer);
         guarantee(entry != ti->connection_map.end() && entry->second.first == that_);
         ti->connection_map.erase(that_->peer);
-        ti->publisher.publish(boost::bind(&ping_disconnection_watcher, that_->peer, _1));
+        ti->publisher.publish(std::bind(&ping_disconnection_watcher, that_->peer, ph::_1));
     }
 }
 
@@ -227,7 +229,7 @@ void connectivity_cluster_t::run_t::connect_to_peer(const peer_address_t *addres
                                                     boost::optional<peer_id_t> expected_id,
                                                     auto_drainer_t::lock_t drainer_lock,
                                                     bool *successful_join,
-                                                    semaphore_t *rate_control) THROWS_NOTHING {
+                                                    co_semaphore_t *rate_control) THROWS_NOTHING {
     // Wait to start the connection attempt, max time is one second per address
     signal_timer_t timeout;
     timeout.start(index * 1000);
@@ -290,14 +292,14 @@ void connectivity_cluster_t::run_t::join_blocking(
     rate_control.co_lock(peer.ips().size() - 1); // Start with only one coroutine able to run
 
     pmap(peer.ips().size(),
-         boost::bind(&connectivity_cluster_t::run_t::connect_to_peer,
-                     this,
-                     &peer,
-                     _1,
-                     expected_id,
-                     drainer_lock,
-                     &successful_join,
-                     &rate_control));
+         std::bind(&connectivity_cluster_t::run_t::connect_to_peer,
+                   this,
+                   &peer,
+                   ph::_1,
+                   expected_id,
+                   drainer_lock,
+                   &successful_join,
+                   &rate_control));
 
     // All attempts have completed
     {
@@ -378,16 +380,19 @@ template<typename T>
 static bool deserialize_and_check(tcp_conn_stream_t *c, T *p, const char *peer) {
     archive_result_t res = deserialize(c, p);
     switch (res) {
-      case ARCHIVE_SUCCESS: return false; // no problem.
+    case archive_result_t::SUCCESS:
+        return false;
 
         // Network error. Report nothing.
-      case ARCHIVE_SOCK_ERROR: case ARCHIVE_SOCK_EOF: return true;
+    case archive_result_t::SOCK_ERROR:
+    case archive_result_t::SOCK_EOF:
+        return true;
 
-      case ARCHIVE_RANGE_ERROR:
+    case archive_result_t::RANGE_ERROR:
         logERR("could not deserialize data received from %s, closing connection", peer);
         return true;
 
-      default: case ARCHIVE_GENERIC_ERROR:
+    default:
         logERR("unknown error occurred on connection from %s, closing connection", peer);
         return true;
     }
@@ -415,7 +420,7 @@ static bool deserialize_compatible_string(tcp_conn_stream_t *conn,
                                           const char *peer) {
     uint64_t raw_size;
     archive_result_t res = deserialize(conn, &raw_size);
-    if (res != ARCHIVE_SUCCESS) {
+    if (res != archive_result_t::SUCCESS) {
         logWRN("Network error while receiving clustering header from %s, closing connection", peer);
         return false;
     }
@@ -765,7 +770,7 @@ void connectivity_cluster_t::run_t::handle(
             if (routing_table.find(it->first) == routing_table.end()) {
                 // `it->first` is the ID of a peer that our peer is connected
                 //  to, but we aren't connected to.
-                coro_t::spawn_now_dangerously(boost::bind(
+                coro_t::spawn_now_dangerously(std::bind(
                     &connectivity_cluster_t::run_t::join_blocking, this,
                     peer_address_t(it->second), // This is where we resolve the peer's ip addresses
                     boost::optional<peer_id_t>(it->first),

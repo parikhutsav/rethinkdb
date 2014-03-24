@@ -86,8 +86,7 @@
 #define DEFAULT_EXTENT_SIZE                       (512 * KILOBYTE)
 
 // Ratio of free ram to use for the cache by default
-// TODO: DEFAULT_MAX_CACHE_RATIO is unused. Should it be deleted?
-#define DEFAULT_MAX_CACHE_RATIO                   0.5
+#define DEFAULT_MAX_CACHE_RATIO                   2
 
 // The maximum number of concurrently active
 // index writes per merger serializer.
@@ -200,11 +199,12 @@
 
 #define COROUTINE_STACK_SIZE                      131072
 
+// How many unused coroutine stacks to keep around (maximally), before they are
+// freed. This value is per thread.
+#define COROUTINE_FREE_LIST_SIZE                  64
+
 #define MAX_COROS_PER_THREAD                      10000
 
-
-// Size of a cache line (used in cache_line_padded_t).
-#define CACHE_LINE_SIZE                           64
 
 // Minimal time we nap before re-checking if a goal is satisfied in the reactor (in ms).
 // This is an optimization to save CPU time. Checking for whether the goal is

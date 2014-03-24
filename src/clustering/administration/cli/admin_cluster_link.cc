@@ -1,5 +1,4 @@
-// Copyright 2010-2012 RethinkDB, all rights reserved.
-#define __STDC_FORMAT_MACROS
+// Copyright 2010-2014 RethinkDB, all rights reserved.
 #include "clustering/administration/cli/admin_cluster_link.hpp"
 
 #include <inttypes.h>
@@ -281,6 +280,7 @@ admin_cluster_link_t::admin_cluster_link_t(const peer_address_set_t &joins,
     directory_manager_client(&message_multiplexer, 'D'),
     our_directory_metadata(cluster_directory_metadata_t(machine_id_t(connectivity_cluster.get_me().get_uuid()),
                                                         connectivity_cluster.get_me(),
+                                                        0, // No cache = no cache size
                                                         get_ips(),
                                                         stat_manager.get_address(),
                                                         metadata_change_handler.get_request_mailbox_address(),

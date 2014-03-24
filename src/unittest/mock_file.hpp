@@ -1,4 +1,4 @@
-// Copyright 2010-2013 RethinkDB, all rights reserved.
+// Copyright 2010-2014 RethinkDB, all rights reserved.
 #ifndef UNITTEST_MOCK_FILE_HPP_
 #define UNITTEST_MOCK_FILE_HPP_
 
@@ -8,6 +8,7 @@
 #include "arch/types.hpp"
 #include "errors.hpp"
 #include "serializer/types.hpp"
+#include "utils.hpp"
 
 namespace unittest {
 
@@ -19,9 +20,9 @@ public:
     mock_file_t(mode_t mode, std::vector<char> *data);
     ~mock_file_t();
 
-    int64_t get_size();
-    void set_size(int64_t size);
-    void set_size_at_least(int64_t size);
+    int64_t get_file_size();
+    void set_file_size(int64_t size);
+    void set_file_size_at_least(int64_t size);
 
     void read_async(int64_t offset, size_t length, void *buf,
                     file_account_t *account, linux_iocallback_t *cb);

@@ -33,7 +33,10 @@ pkg_version () {
 
 # Generate shell commands that add the paths for this package to the environment
 pkg_environment () {
-    test -d "$install_dir/include" && echo "export CXXFLAGS=\"\${CXXFLAGS:-} -isystem $(niceabspath "$install_dir/include")\"" || :
+    if test -d "$install_dir/include"; then
+        echo "export CXXFLAGS=\"\${CXXFLAGS:-} -isystem $(niceabspath "$install_dir/include")\""
+        echo "export   CFLAGS=\"\${CFLAGS:-}   -isystem $(niceabspath "$install_dir/include")\""
+    fi
     test -d "$install_dir/lib" && echo "export LDFLAGS=\"\${LDFLAGS:-} -L$(niceabspath "$install_dir/lib")\"" || :
     test -d "$install_dir/bin" && echo "export PATH=\"$(niceabspath "$install_dir/bin"):\$PATH\"" || :
 }
@@ -132,6 +135,18 @@ pkg_depends_env () {
     for dep in $(pkg_depends); do
         eval "$(pkg environment $dep)"
     done
+}
+
+cross_build_env () {
+    # Unsetting these variables will pick up the toolchain from PATH.
+    # Assuming that cross-compilation is achieved by setting these variables,
+    # the toolchain in PATH will build executables that can be executed in the
+    # build environment.
+    unset CXX
+    unset AR
+    unset RANLIB
+    unset CC
+    unset LD
 }
 
 error () {

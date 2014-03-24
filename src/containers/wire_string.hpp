@@ -10,7 +10,7 @@
  * This has two advantages over C-strings:
  * - it can be efficiently serialized and deserialized
  * - it can contain any character, including '\0'
- * 
+ *
  * Its length cannot be changed once created.
  *
  * `wire_string_t` has no public constructors, and doesn't have
@@ -54,7 +54,7 @@ public:
 
 private:
     size_t size_;
-    char data_[0];
+    char data_[1];
 
     DISABLE_COPYING(wire_string_t);
 };

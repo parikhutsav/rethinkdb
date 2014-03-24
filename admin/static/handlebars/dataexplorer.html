@@ -79,7 +79,7 @@ Sorry, the data explorer does not support your browser. Please upgrade it. See t
 <script id="alert-connection_fail-template" type="text/x-handlebars-template">
     <div class="alert alert-error displayed_alert" data-alert="alert">
         <a class="close" href="#">&times;</a>
-        <p>The connection to the server failed. Please try to <a href="#" id="reconnect">reconnect</a></p>
+        <p>The connection to the server failed. Try <a href="#" id="reconnect">running</a> the query again.</p>
     </div>
 </script>
 
@@ -91,6 +91,7 @@ Sorry, the data explorer does not support your browser. Please upgrade it. See t
 
 <script id="dataexplorer-description_with_example-template" type="text/x-handlebars-template">
     <p>{{print_safe description}}</p>
+    {{#if grouped_data}}<p class="grouped_data_warning"><strong>Note: </strong>Commands chained after group will operate on each reduction. Call ungroup to operate on the array of groups.</p>{{/if}}
     <div class="db_table_available"></div>
     <div class="separation"></div>
     {{print_safe example}}
@@ -145,6 +146,7 @@ Sorry, the data explorer does not support your browser. Please upgrade it. See t
         <textarea class="input_query" id="input_query"></textarea>
         <div class="button_container">
             <button class="btn button_query execute_query">Run</button>
+            <button class="btn button_query abort_query">Abort</button>
             <button class="btn button_query clear_query">Clear</button>
         </div>
     </div>
@@ -204,7 +206,7 @@ Sorry, the data explorer does not support your browser. Please upgrade it. See t
         </ul>
         <p class="metadata">
             {{#if show_query_warning}}Results from the previous query:{{/if}}
-            {{#if execution_time_pretty}}Executed in {{execution_time_pretty}}.{{/if}}
+            {{#if execution_time_pretty}}Executed in <span title="Queries originating from the web UI incur additional HTTP round-trip latency." class="execution_time">{{execution_time_pretty}}</span>.{{/if}}
             {{#if no_results}}No results returned.{{/if}}
             {{#if num_results}}{{num_results}} {{pluralize_noun 'row' num_results}} returned
                 {{#if limit_value}}, {{limit_value}} displayed{{/if}}{{#if skip_value}}, {{skip_value}} skipped{{/if}},

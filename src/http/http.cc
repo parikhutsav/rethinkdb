@@ -1,6 +1,7 @@
 // Copyright 2010-2012 RethinkDB, all rights reserved.
 #include "http/http.hpp"
 
+#include <math.h>
 #include <zlib.h>
 
 #include <exception>
@@ -241,6 +242,7 @@ bool maybe_gzip_response(const http_req_t &req, http_res_t *res) {
         double val = 1.0;
         char *endptr;
         if (it->second.length() != 0) {
+            set_errno(0); // Clear errno because strtod doesn't
             val = strtod(it->second.c_str(), &endptr);
             if (endptr == it->second.c_str() ||
                 (get_errno() == ERANGE &&
@@ -301,6 +303,7 @@ bool maybe_gzip_response(const http_req_t &req, http_res_t *res) {
 
     zres = deflate(&zstream, Z_FINISH);
     if (zres != Z_STREAM_END) {
+        deflateEnd(&zstream);
         return false;
     }
 

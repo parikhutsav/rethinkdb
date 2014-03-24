@@ -32,7 +32,6 @@ module 'DataExplorerView', ->
         template_suggestion_name: Handlebars.templates['dataexplorer_suggestion_name_li-template']
         description_with_example_template: Handlebars.templates['dataexplorer-description_with_example-template']
         alert_connection_fail_template: Handlebars.templates['alert-connection_fail-template']
-        alert_reconnection_success_template: Handlebars.templates['alert-reconnection_success-template']
         databases_suggestions_template: Handlebars.templates['dataexplorer-databases_suggestions-template']
         namespaces_suggestions_template: Handlebars.templates['dataexplorer-namespaces_suggestions-template']
         reason_dataexplorer_broken_template: Handlebars.templates['dataexplorer-reason_broken-template']
@@ -46,6 +45,8 @@ module 'DataExplorerView', ->
         max_size_stack: 100 # If the stack of the query (including function, string, object etc. is greater than @max_size_stack, we stop parsing the query
         max_size_query: 1000 # If the query is more than 1000 char, we don't show suggestion (codemirror doesn't highlight/parse if the query is more than 1000 characdd_ters too
 
+        delay_show_abort: 70 # If a query didn't return during this period (ms) we let people abort the query
+
         events:
             'mouseup .CodeMirror': 'handle_click'
             'mousedown .suggestion_name_li': 'select_suggestion' # Keep mousedown to compete with blur on .input_query
@@ -53,8 +54,9 @@ module 'DataExplorerView', ->
             'mouseout .suggestion_name_li' : 'mouseout_suggestion'
             'click .clear_query': 'clear_query'
             'click .execute_query': 'execute_query'
+            'click .abort_query': 'abort_query'
             'click .change_size': 'toggle_size'
-            'click #reconnect': 'reconnect'
+            'click #reconnect': 'execute_query'
             'click .more_results': 'show_more_results'
             'click .close': 'close_alert'
             'click .clear_queries_link': 'clear_history_view'
@@ -314,6 +316,7 @@ module 'DataExplorerView', ->
             value: ['number', 'bool', 'string', 'array', 'object', 'time']
             any: ['number', 'bool', 'string', 'array', 'object', 'stream', 'selection', 'table', 'db', 'r', 'error' ]
             sequence: ['table', 'selection', 'stream', 'array']
+            grouped_stream: ['stream', 'array']
 
         # Convert meta types (value, any or sequence) to an array of types or return an array composed of just the type
         convert_type: (type) =>
@@ -341,12 +344,14 @@ module 'DataExplorerView', ->
                 else
                     full_tag = tag+'(' # full tag is the name plus a parenthesis (we will match the parenthesis too)
 
-                @descriptions[full_tag] =
+                @descriptions[full_tag] = (grouped_data) =>
                     name: tag
                     args: /.*(\(.*\))/.exec(command['body'])?[1]
-                    description: @description_with_example_template
-                        description: command['description']
-                        example: command['example']
+                    description:
+                        @description_with_example_template
+                            description: command['description']
+                            example: command['example']
+                            grouped_data: grouped_data is true and full_tag isnt 'group(' and full_tag isnt 'ungroup('
 
             parents = {}
             returns = []
@@ -432,6 +437,7 @@ module 'DataExplorerView', ->
             @TermBaseConstructor = r.expr(1).constructor.__super__.constructor.__super__.constructor
 
             @state = args.state
+            @executing = false
 
             # Load options from local storage
             if window.localStorage?.options?
@@ -480,8 +486,6 @@ module 'DataExplorerView', ->
 
             @driver_handler = new DataExplorerView.DriverHandler
                 container: @
-                on_success: @success_on_connect
-                on_fail: @error_on_connect
 
             # One callback to rule them all
             $(window).mousemove @handle_mousemove
@@ -516,16 +520,16 @@ module 'DataExplorerView', ->
                 @$('.reason_dataexplorer_broken').html @reason_dataexplorer_broken_template
                     is_internet_explorer: true
                 @$('.reason_dataexplorer_broken').slideDown 'fast'
-                @$('.button_query').prop 'disabled', 'disabled'
+                @$('.button_query').prop 'disabled', true
             else if (not DataView?) or (not Uint8Array?) # The main two components that the javascript driver requires.
                 @$('.reason_dataexplorer_broken').html @reason_dataexplorer_broken_template
                 @$('.reason_dataexplorer_broken').slideDown 'fast'
-                @$('.button_query').prop 'disabled', 'disabled'
+                @$('.button_query').prop 'disabled', true
             else if not window.r? # In case the javascript driver is not found (if build from source for example)
                 @$('.reason_dataexplorer_broken').html @reason_dataexplorer_broken_template
                     no_driver: true
                 @$('.reason_dataexplorer_broken').slideDown 'fast'
-                @$('.button_query').prop 'disabled', 'disabled'
+                @$('.button_query').prop 'disabled', true
 
             # Let's bring back the data explorer to its old state (if there was)
             if @state?.query? and @state?.results? and @state?.metadata?
@@ -903,13 +907,16 @@ module 'DataExplorerView', ->
                         result: result
                     result.suggestions = @uniq result.suggestions
 
+                    @grouped_data = @count_group_level(stack).count_group > 0
+
                     if result.suggestions?.length > 0
                         for suggestion, i in result.suggestions
-                            result.suggestions.sort() # We could eventually sort things earlier with a merge sort but for now that should be enough
-                            @current_suggestions.push suggestion
-                            @.$('.suggestion_name_list').append @template_suggestion_name
-                                id: i
-                                suggestion: suggestion
+                            if suggestion isnt 'ungroup(' or @grouped_data is true # We add the suggestion for `ungroup` only if we are in a group_stream/data (using the flag @grouped_data)
+                                result.suggestions.sort() # We could eventually sort things earlier with a merge sort but for now that should be enough
+                                @current_suggestions.push suggestion
+                                @.$('.suggestion_name_list').append @template_suggestion_name
+                                    id: i
+                                    suggestion: suggestion
                     else if result.description?
                         @description = result.description
 
@@ -1175,6 +1182,7 @@ module 'DataExplorerView', ->
                 query: query_before_cursor
                 position: 0
 
+
             if stack is null # Stack is null if the query was too big for us to parse
                 @ignore_tab_keyup = false
                 @hide_suggestion_and_description()
@@ -1249,13 +1257,18 @@ module 'DataExplorerView', ->
                 result: result
             result.suggestions = @uniq result.suggestions
 
+            @grouped_data = @count_group_level(stack).count_group > 0
+
             if result.suggestions?.length > 0
+                show_suggestion = false
                 for suggestion, i in result.suggestions
-                    @current_suggestions.push suggestion
-                    @.$('.suggestion_name_list').append @template_suggestion_name
-                        id: i
-                        suggestion: suggestion
-                if @state.options.suggestions is true
+                    if suggestion isnt 'ungroup(' or @grouped_data is true # We add the suggestion for `ungroup` only if we are in a group_stream/data (using the flag @grouped_data)
+                        show_suggestion = true
+                        @current_suggestions.push suggestion
+                        @.$('.suggestion_name_list').append @template_suggestion_name
+                            id: i
+                            suggestion: suggestion
+                if @state.options.suggestions is true and show_suggestion is true
                     @show_suggestion()
                 else
                     @hide_suggestion()
@@ -1949,6 +1962,42 @@ module 'DataExplorerView', ->
                     return null
             return stack
 
+        # Count the number of `group` commands minus `ungroup` commands in the current level
+        # We count per level because we don't want to report a positive number of group for nested queries, e.g:
+        # r.table("foo").group("bar").map(function(doc) { doc.merge(
+        #
+        # We return an object with two fields
+        #   - count_group: number of `group` commands minus the number of `ungroup` commands
+        #   - parse_level: should we keep parsing the same level
+        count_group_level: (stack) =>
+            count_group = 0
+            if stack.length > 0
+                 # Flag for whether or not we should keep looking for group/ungroup
+                 # we want the warning to appear only at the same level
+                parse_level = true
+
+                element = stack[stack.length-1]
+                if element.body? and element.body.length > 0 and element.complete is false
+                    parse_body = @count_group_level element.body
+                    count_group += parse_body.count_group
+                    parse_level = parse_body.parse_level
+
+                    if element.body[0].type is 'return'
+                        parse_level = false
+                    if element.body[element.body.length-1].type is 'function'
+                        parse_level = false
+
+                if parse_level is true
+                    for i in [stack.length-1..0] by -1
+                        if stack[i].type is 'function' and stack[i].name is 'ungroup('
+                            count_group -= 1
+                        else if stack[i].type is 'function' and stack[i].name is 'group('
+                            count_group += 1
+
+            count_group: count_group
+            parse_level: parse_level
+
+
         # Decide if we have to show a suggestion or a description
         # Mainly use the stack created by extract_data_from_query
         create_suggestion: (args) =>
@@ -2230,7 +2279,7 @@ module 'DataExplorerView', ->
         # Extend description for .db() and .table() with dbs/tables names
         extend_description: (fn) =>
             if fn is 'db(' or fn is 'dbDrop('
-                description = _.extend {}, @descriptions[fn]
+                description = _.extend {}, @descriptions[fn]()
                 if databases.length is 0
                     data =
                         no_database: true
@@ -2244,7 +2293,7 @@ module 'DataExplorerView', ->
             else if fn is 'table(' or fn is 'tableDrop('
                 # Look for the argument of the previous db()
                 database_used = @extract_database_used()
-                description = _.extend {}, @descriptions[fn]
+                description = _.extend {}, @descriptions[fn]()
                 if database_used.error is false
                     namespaces_available = []
                     for namespace in namespaces.models
@@ -2264,7 +2313,7 @@ module 'DataExplorerView', ->
 
                 @extra_suggestions= namespaces_available
             else
-                description = @descriptions[fn]
+                description = @descriptions[fn] @grouped_data
                 @extra_suggestions= null
             return description
 
@@ -2327,12 +2376,22 @@ module 'DataExplorerView', ->
                 @state.cursor.next get_result_callback
                 $(window).scrollTop(@.$('.results_container').offset().top)
             catch err
-                @.$('.loading_query_img').css 'display', 'none'
+                @toggle_executing false
                 # We print the query here (the user just hit `more data`)
                 @results_view.render_error(@query, err)
 
+        abort_query: =>
+            @driver_handler.close_connection()
+            @id_execution++
+            @toggle_executing false
+
         # Function that execute the queries in a synchronous way.
         execute_query: =>
+            # We don't let people execute more than one query at a time on the same connection
+            # While we remove the button run, `execute_query` could still be called with Shift+Enter
+            if @executing is true
+                return
+
             # Hide the option, if already hidden, nothing happens.
             @$('.profiler_enabled').slideUp 'fast'
 
@@ -2360,16 +2419,32 @@ module 'DataExplorerView', ->
                         no_query: true
                     @results_view.render_error(null, error, true)
                 else
-                    @.$('.loading_query_img').show()
+                    @toggle_executing true
                     @execute_portion()
 
             catch err
-                @.$('.loading_query_img').hide()
+                @toggle_executing false
                 # Missing brackets, so we display everything (we don't know if we properly splitted the query)
                 @results_view.render_error(@query, err, true)
                 @save_query
                     query: @raw_query
                     broken_query: true
+
+        toggle_executing: (executing) =>
+            if executing is true
+                @executing = true
+                @timeout_show_abort = setTimeout =>
+                    #TODO Delay a few ms
+                    @.$('.loading_query_img').show()
+                    @$('.execute_query').hide()
+                    @$('.abort_query').show()
+                , @delay_show_abort
+            else if executing is false
+                clearTimeout @timeout_show_abort
+                @executing = false
+                @.$('.loading_query_img').hide()
+                @$('.execute_query').show()
+                @$('.abort_query').hide()
 
         # A portion is one query of the whole input.
         execute_portion: =>
@@ -2381,7 +2456,7 @@ module 'DataExplorerView', ->
                 try
                     rdb_query = @evaluate(full_query)
                 catch err
-                    @.$('.loading_query_img').hide()
+                    @toggle_executing false
                     if @queries.length > 1
                         @results_view.render_error(@raw_queries[@index], err, true)
                     else
@@ -2402,7 +2477,13 @@ module 'DataExplorerView', ->
                     rdb_global_callback = @generate_rdb_global_callback @id_execution
                     # Date are displayed in their raw format for now.
                     @state.last_query_has_profile = @state.options.profiler
-                    rdb_query.private_run {connection: @driver_handler.connection, timeFormat: "raw", profile: @state.options.profiler}, rdb_global_callback # @rdb_global_callback can be fire more than once
+                    @driver_handler.create_connection (error, connection) =>
+                        if (error)
+                            @error_on_connect error
+                        else
+                            rdb_query.private_run connection, {timeFormat: "raw", profile: @state.options.profiler}, rdb_global_callback # @rdb_global_callback can be fired more than once
+                    , @id_execution, @error_on_connect
+
                     return true
                 else if rdb_query instanceof DataExplorerView.DriverHandler
                     # Nothing to do
@@ -2410,7 +2491,7 @@ module 'DataExplorerView', ->
                 else
                     @non_rethinkdb_query += @queries[@index-1]
                     if @index is @queries.length
-                        @.$('.loading_query_img').hide()
+                        @toggle_executing false
                         error = @query_error_template
                             last_non_query: true
                         @results_view.render_error(@raw_queries[@index-1], error, true)
@@ -2428,7 +2509,7 @@ module 'DataExplorerView', ->
                     get_result_callback = @generate_get_result_callback id_execution
 
                     if error?
-                        @.$('.loading_query_img').hide()
+                        @toggle_executing false
                         if @queries.length > 1
                             @results_view.render_error(@raw_queries[@index-1], error)
                         else
@@ -2457,7 +2538,7 @@ module 'DataExplorerView', ->
                             else
                                 get_result_callback() # Display results
                         else
-                            @.$('.loading_query_img').hide()
+                            @toggle_executing false
 
                             # Save the last executed query and the last displayed results
                             @current_results = cursor
@@ -2503,7 +2584,7 @@ module 'DataExplorerView', ->
                             @state.cursor.next get_result_callback
                             return true
 
-                    @.$('.loading_query_img').hide()
+                    @toggle_executing false
 
                     # if data is undefined or @current_results.length is @limit
                     @state.query = @query
@@ -2531,7 +2612,7 @@ module 'DataExplorerView', ->
             "use strict"
             return eval(query)
 
-        # In a string \n becomes \\\\n, outside a string we just remove \n, so
+        # In a string \n becomes \\n, outside a string we just remove \n, so
         #   r
         #   .expr('hello
         #   world')
@@ -2550,7 +2631,7 @@ module 'DataExplorerView', ->
 
                 if is_parsing_string is true
                     if char is string_delimiter and query[i-1]? and query[i-1] isnt '\\'
-                        result_query += query.slice(start, i+1).replace(/\n/g, '\\\\n')
+                        result_query += query.slice(start, i+1).replace(/\n/g, '\\n')
                         start = i+1
                         is_parsing_string = false
                         continue
@@ -2652,24 +2733,12 @@ module 'DataExplorerView', ->
             @codemirror.setValue ''
             @codemirror.focus()
 
-        # Called if the driver could connect
-        success_on_connect: (connection) =>
-            @connection = connection
-
-            @results_view.cursor_timed_out()
-            if @reconnecting is true
-                @.$('#user-alert-space').hide()
-                @.$('#user-alert-space').html @alert_reconnection_success_template()
-                @.$('#user-alert-space').slideDown 'fast'
-            @reconnecting = false
-            @driver_connected = 'connected'
-
         # Called if the driver could not connect
         error_on_connect: (error) =>
             if /^(Unexpected token)/.test(error.message)
                 # Unexpected token, the server couldn't parse the protobuf message
                 # The truth is we don't know which query failed (unexpected token), but it seems safe to suppose in 99% that the last one failed.
-                @.$('.loading_query_img').hide()
+                @toggle_executing false
                 @results_view.render_error(null, error)
 
                 # We save the query since the callback will never be called.
@@ -2732,8 +2801,6 @@ module 'DataExplorerView', ->
             @results_view.destroy()
             @history_view.destroy()
             @driver_handler.destroy()
-            if @state.cursor?
-                @state.cursor.close()
 
             @display_normal()
             $(window).off 'resize', @display_full
@@ -3209,27 +3276,54 @@ module 'DataExplorerView', ->
                     position_scrollbar()
 
  
+        # JavaScript doesn't let us set a timezone
+        # So we create a date shifted of the timezone difference
+        # Then replace the timezone of the JS date with the one from the ReQL object
         date_to_string: (date) =>
-            if date.timezone?
-                timezone = date.timezone
-                
-                # Extract data from the timezone
-                timezone_array = date.timezone.split(':')
-                sign = timezone_array[0][0] # Keep the sign
-                timezone_array[0] = timezone_array[0].slice(1) # Remove the sign
+            timezone = date.timezone
+            
+            # Extract data from the timezone
+            timezone_array = date.timezone.split(':')
+            sign = timezone_array[0][0] # Keep the sign
+            timezone_array[0] = timezone_array[0].slice(1) # Remove the sign
 
-                # Save the timezone in minutes
-                timezone_int = (parseInt(timezone_array[0])*60+parseInt(timezone_array[1]))*60
-                if sign is '-'
-                    timezone_int = -1*timezone_int
-                # Add the user local timezone
-                timezone_int += (new Date()).getTimezoneOffset()*60
+            # Save the timezone in minutes
+            timezone_int = (parseInt(timezone_array[0])*60+parseInt(timezone_array[1]))*60
+            if sign is '-'
+                timezone_int = -1*timezone_int
+
+            # d = real date with user's timezone
+            d = new Date(date.epoch_time*1000)
+
+            # Add the user local timezone
+            timezone_int += d.getTimezoneOffset()*60
+
+            # d_shifted = date shifted with the difference between the two timezones
+            # (user's one and the one in the ReQL object)
+            d_shifted = new Date((date.epoch_time+timezone_int)*1000)
+
+            # If the timezone between the two dates is not the same,
+            # it means that we changed time between (e.g because of daylight savings)
+            if d.getTimezoneOffset() isnt d_shifted.getTimezoneOffset()
+                # d_shifted_bis = date shifted with the timezone of d_shifted and not d
+                d_shifted_bis = new Date((date.epoch_time+timezone_int-(d.getTimezoneOffset()-d_shifted.getTimezoneOffset())*60)*1000)
+
+                if d_shifted.getTimezoneOffset() isnt d_shifted_bis.getTimezoneOffset()
+                    # We moved the clock forward -- and therefore cannot generate the appropriate time with JS
+                    # Let's create the date outselves...
+                    str_pieces = d_shifted_bis.toString().match(/([^ ]* )([^ ]* )([^ ]* )([^ ]* )(\d{2})(.*)/)
+                    hours = parseInt(str_pieces[5])
+                    hours++
+                    if hours.toString().length is 1
+                        hours = "0"+hours.toString()
+                    else
+                        hours = hours.toString()
+                    #Note str_pieces[0] is the whole string
+                    raw_date_str = str_pieces[1]+" "+str_pieces[2]+" "+str_pieces[3]+" "+str_pieces[4]+" "+hours+str_pieces[6]
+                else
+                    raw_date_str = d_shifted_bis.toString()
             else
-                timezone = '+00:00'
-                timezone_int = (new Date()).getTimezoneOffset()*60
-
-            # Tweak epoch and create a date
-            raw_date_str = (new Date((date.epoch_time+timezone_int)*1000)).toString()
+                raw_date_str = d_shifted.toString()
 
             # Remove the timezone and replace it with the good one
             return raw_date_str.slice(0, raw_date_str.indexOf('GMT')+3)+timezone
@@ -3464,6 +3558,10 @@ module 'DataExplorerView', ->
 
             @set_scrollbar()
             @delegateEvents()
+            @$('.execution_time').tooltip
+                for_dataexplorer: true
+                trigger: 'hover'
+                placement: 'bottom'
             return @
  
            
@@ -3679,9 +3777,6 @@ module 'DataExplorerView', ->
 
         # I don't want that thing in window
         constructor: (args) ->
-            @on_success = args.on_success
-            @on_fail = args.on_fail
-
             if window.location.port is ''
                 if window.location.protocol is 'https:'
                     port = 443
@@ -3696,7 +3791,6 @@ module 'DataExplorerView', ->
                 pathname: window.location.pathname
 
             @hack_driver()
-            @connect()
         
         # Hack the driver, remove .run() and private_run()
         hack_driver: =>
@@ -3708,44 +3802,29 @@ module 'DataExplorerView', ->
                     throw that.query_error_template
                         found_run: true
 
-        connect: =>
-            that = @
+        close_connection: =>
+            if @connection?.open is true
+                @connection.close {noreplyWait: false}
+                @connection = null
 
-            if @connection?
-                if @driver_status is 'connected'
-                    try
-                        @connection.close()
-                    catch err
-                        # Nothing bad here, let's just not pollute the console
+        create_connection: (cb, id_execution, connection_cb) =>
+            that = @
+            @id_execution = id_execution
+
             try
-                r.connect @server, @connect_callback
+                ((_id_execution) =>
+                    r.connect @server, (error, connection) =>
+                        if _id_execution is @id_execution
+                            connection.removeAllListeners 'error' # See issue 1347
+                            connection.on 'error', connection_cb
+                            @connection = connection
+                            cb(error, connection)
+                        else
+                            connection.cancel()
+                )(id_execution)
    
-                @interval = setInterval @ping, @ping_time
             catch err
                 @on_fail(err)
 
-        # Callback for r.connect
-        connect_callback: (err, connection) =>
-         if err?
-            @.on_fail(err)
-         else
-            @connection = connection
-            @on_success(connection)
-
-            connection.removeAllListeners 'error'
-            connection.on 'error', @on_fail
-
-    
-        # Makre sure the connection doesn't die
-        ping: =>
-            r.expr(1).private_run @connection, ->
-                @
-
-        # We could have something to pospone the call to @ping everytime the user make a query
-
         destroy: =>
-            try
-                @connection.close()
-            catch err
-                # Nothing bad here, let's just not pollute the console
-            clearTimeout @interval
+            @close_connection()
